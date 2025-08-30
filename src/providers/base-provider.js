@@ -1,13 +1,6 @@
 const axios = require('axios');
-
-// Cache for MIME types to avoid repeated lookups
-const MIME_TYPE_CACHE = new Map([
-  ['.jpg', 'image/jpeg'],
-  ['.jpeg', 'image/jpeg'],
-  ['.png', 'image/png'],
-  ['.webp', 'image/webp'],
-  ['.gif', 'image/gif']
-]);
+const ImageProcessingMixin = require('./mixins/image-processing-mixin');
+const MessageFormattingMixin = require('./mixins/message-formatting-mixin');
 
 // HTTP client with connection pooling and retry logic
 const httpClient = axios.create({
@@ -56,6 +49,16 @@ class BaseProvider {
     // Error handling improvements
     this._retryAttempts = options.retryAttempts || 3;
     this._retryDelay = options.retryDelay || 1000;
+
+    // Mixins will be initialized by individual providers
+  }
+
+  /**
+   * Initialize mixins with provider-specific configuration
+   */
+  _initializeMixins() {
+    // Mixins will be initialized by individual providers
+    // This method can be overridden by subclasses
   }
 
   // ============================================================================
@@ -375,6 +378,12 @@ class BaseProvider {
    * Format vision messages for provider consumption with optimized processing
    */
   formatVisionMessages (messages) {
+    // Use the message formatting mixin if available, otherwise use default implementation
+    if (this.formatVisionMessagesForAnthropic) {
+      return this.formatVisionMessagesForAnthropic(messages);
+    }
+    
+    // Default implementation
     const formattedMessages = [];
     const messageCount = messages.length;
 
@@ -391,7 +400,7 @@ class BaseProvider {
             } else if (item.type === 'image_url') {
               return {
                 type: 'image_url',
-                image_url: this.processImageUrl(item.image_url)
+                image_url: this.processImageUrl ? this.processImageUrl(item.image_url) : item.image_url
               };
             }
             return item;
@@ -416,6 +425,12 @@ class BaseProvider {
    * Process image URLs, file paths, or base64 data with caching
    */
   processImageUrl (imageUrl) {
+    // Use the image processing mixin if available, otherwise use default implementation
+    if (this.processImage) {
+      return this.processImage(imageUrl);
+    }
+    
+    // Default implementation
     if (!imageUrl) {
       throw new Error('Image is required for vision requests');
     }
@@ -446,15 +461,36 @@ class BaseProvider {
    * Get MIME type from file extension with caching
    */
   getMimeType (filePath) {
+    // Use the image processing mixin if available, otherwise use default implementation
+    if (this.getMimeType && this !== this.getMimeType) {
+      return this.getMimeType(filePath);
+    }
+    
+    // Default implementation
     const path = require('path');
     const ext = path.extname(filePath).toLowerCase();
-    return MIME_TYPE_CACHE.get(ext) || 'image/jpeg';
+    
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif'
+    };
+    
+    return mimeTypes[ext] || 'image/jpeg';
   }
 
   /**
    * Validate image format and size with optimized file operations
    */
   validateImage (image, maxSize = 20971520) { // 20MB default
+    // Use the image processing mixin if available, otherwise use default implementation
+    if (this.validateImage && this !== this.validateImage) {
+      return this.validateImage(image, { maxSize });
+    }
+    
+    // Default implementation
     if (!image) {
       throw new Error('Image is required for vision requests');
     }

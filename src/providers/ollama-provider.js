@@ -1,4 +1,5 @@
 const BaseProvider = require('./base-provider');
+const CacheMixin = require('./mixins/cache-mixin');
 const axios = require('axios');
 
 class OllamaProvider extends BaseProvider {
@@ -11,11 +12,36 @@ class OllamaProvider extends BaseProvider {
       responseFormat: 'ollama'
     });
 
-    // Performance optimizations
-    this._responseCache = new Map();
-    this._maxCacheSize = 50;
-    this._cacheExpiry = 2 * 60 * 1000; // 2 minutes
-    this._lastCacheCleanup = Date.now();
+    // Initialize mixins after super() call
+    this._initializeMixins();
+  }
+
+  /**
+   * Initialize mixins with provider-specific configuration
+   */
+  _initializeMixins() {
+    // Initialize cache mixin for response caching
+    const cacheMixin = new CacheMixin({
+      defaultExpiry: 2 * 60 * 1000, // 2 minutes
+      defaultMaxSize: 50,
+      cleanupInterval: 2 * 60 * 1000 // 2 minutes
+    });
+
+    // Copy all methods from the mixin
+    Object.getOwnPropertyNames(Object.getPrototypeOf(cacheMixin)).forEach(key => {
+      if (key !== 'constructor') {
+        this[key] = cacheMixin[key].bind(this);
+      }
+    });
+
+    // Copy instance properties
+    Object.assign(this, cacheMixin);
+
+    // Create response cache
+    this.createCache('responses', {
+      expiry: 2 * 60 * 1000,
+      maxSize: 50
+    });
   }
 
   // ============================================================================
@@ -41,11 +67,13 @@ class OllamaProvider extends BaseProvider {
       const finalResponse = this._parseStreamingResponse(responseText);
       return finalResponse;
     } else {
-      // Single response, parse normally
+      // Single response, try to parse normally
       try {
-        return JSON.parse(responseText);
+        const parsed = JSON.parse(responseText);
+        return parsed;
       } catch (error) {
-        return { content: responseText };
+        // If it's not valid JSON, treat it as a malformed response
+        return { content: '' };
       }
     }
   }
@@ -108,33 +136,63 @@ class OllamaProvider extends BaseProvider {
   _parseStreamingResponse (responseText) {
     // Check cache first
     const cacheKey = this._generateCacheKey(responseText);
-    if (this._responseCache.has(cacheKey)) {
-      const cached = this._responseCache.get(cacheKey);
-      if (Date.now() - cached.timestamp < this._cacheExpiry) {
-        return cached.response;
-      }
+    if (this.hasCache('responses', cacheKey)) {
+      return this.getCache('responses', cacheKey);
     }
 
     const lines = responseText.trim().split('\n');
     const lineCount = lines.length;
     
-    // Start from the last line and work backwards for efficiency
-    for (let i = lineCount - 1; i >= 0; i--) {
+    // For streaming responses, we need to reconstruct the complete content
+    let completeContent = '';
+    let finalResponse = null;
+    
+    // Process all lines to build complete content
+    for (let i = 0; i < lineCount; i++) {
       try {
         const parsed = JSON.parse(lines[i]);
-        if (parsed.message || parsed.content) {
-          // Cache the result
-          this._cacheResult(cacheKey, parsed);
-          return parsed;
+        
+        // If this line has content, accumulate it
+        if (parsed.message?.content) {
+          completeContent += parsed.message.content;
+          finalResponse = parsed;
+        } else if (parsed.content) {
+          completeContent += parsed.content;
+          finalResponse = parsed;
+        } else if (parsed.response) {
+          completeContent += parsed.response;
+          finalResponse = parsed;
+        }
+        
+        // If this is the final response (done: true), use it as the base
+        if (parsed.done === true) {
+          finalResponse = parsed;
         }
       } catch (e) {
+        // Skip malformed lines
         continue;
       }
     }
     
-    // If we can't parse any line, return the raw response
-    const fallbackResponse = { content: responseText };
-    this._cacheResult(cacheKey, fallbackResponse);
+    // If we have accumulated content, create a proper response
+    if (completeContent && finalResponse) {
+      // Create a response with the complete content
+      const reconstructedResponse = {
+        ...finalResponse,
+        message: finalResponse.message ? {
+          ...finalResponse.message,
+          content: completeContent
+        } : { content: completeContent }
+      };
+      
+      // Cache the result
+      this.setCache('responses', cacheKey, reconstructedResponse);
+      return reconstructedResponse;
+    }
+    
+    // If we can't parse any line or no content, return empty response
+    const fallbackResponse = { content: '' };
+    this.setCache('responses', cacheKey, fallbackResponse);
     return fallbackResponse;
   }
 
@@ -155,64 +213,22 @@ class OllamaProvider extends BaseProvider {
     return hash.toString();
   }
 
-  /**
-   * Cache result with size management and cleanup
-   */
-  _cacheResult (key, value) {
-    // Periodic cache cleanup
-    if (Date.now() - this._lastCacheCleanup > this._cacheExpiry) {
-      this._cleanupCache();
-      this._lastCacheCleanup = Date.now();
-    }
-
-    // Check cache size and trim if necessary
-    if (this._responseCache.size >= this._maxCacheSize) {
-      // Remove oldest entries (first 20% of cache)
-      const removeCount = Math.floor(this._maxCacheSize * 0.2);
-      const keys = Array.from(this._responseCache.keys()).slice(0, removeCount);
-      keys.forEach(k => this._responseCache.delete(k));
-    }
-
-    this._responseCache.set(key, {
-      response: value,
-      timestamp: Date.now()
-    });
-  }
-
-  /**
-   * Clean up expired cache entries
-   */
-  _cleanupCache () {
-    const now = Date.now();
-    for (const [key, value] of this._responseCache.entries()) {
-      if (now - value.timestamp > this._cacheExpiry) {
-        this._responseCache.delete(key);
-      }
-    }
-  }
-
   // ============================================================================
-  // CACHE MANAGEMENT METHODS
+  // CACHE MANAGEMENT METHODS (Delegated to CacheMixin)
   // ============================================================================
 
   /**
    * Clear all caches
    */
   clearCaches () {
-    this._responseCache.clear();
-    this._lastCacheCleanup = Date.now();
+    this.clearAllCaches();
   }
 
   /**
    * Get cache statistics
    */
   getCacheStats () {
-    return {
-      responseCacheSize: this._responseCache.size,
-      maxCacheSize: this._maxCacheSize,
-      cacheExpiry: this._cacheExpiry,
-      lastCleanup: this._lastCacheCleanup
-    };
+    return this.getAllCacheStats();
   }
 
   // All other core functionality is inherited from BaseProvider
