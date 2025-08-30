@@ -41,11 +41,13 @@ class OllamaProvider extends BaseProvider {
       const finalResponse = this._parseStreamingResponse(responseText);
       return finalResponse;
     } else {
-      // Single response, parse normally
+      // Single response, try to parse normally
       try {
-        return JSON.parse(responseText);
+        const parsed = JSON.parse(responseText);
+        return parsed;
       } catch (error) {
-        return { content: responseText };
+        // If it's not valid JSON, treat it as a malformed response
+        return { content: '' };
       }
     }
   }
@@ -118,22 +120,55 @@ class OllamaProvider extends BaseProvider {
     const lines = responseText.trim().split('\n');
     const lineCount = lines.length;
     
-    // Start from the last line and work backwards for efficiency
-    for (let i = lineCount - 1; i >= 0; i--) {
+    // For streaming responses, we need to reconstruct the complete content
+    let completeContent = '';
+    let finalResponse = null;
+    
+    // Process all lines to build complete content
+    for (let i = 0; i < lineCount; i++) {
       try {
         const parsed = JSON.parse(lines[i]);
-        if (parsed.message || parsed.content) {
-          // Cache the result
-          this._cacheResult(cacheKey, parsed);
-          return parsed;
+        
+        // If this line has content, accumulate it
+        if (parsed.message?.content) {
+          completeContent += parsed.message.content;
+          finalResponse = parsed;
+        } else if (parsed.content) {
+          completeContent += parsed.content;
+          finalResponse = parsed;
+        } else if (parsed.response) {
+          completeContent += parsed.response;
+          finalResponse = parsed;
+        }
+        
+        // If this is the final response (done: true), use it as the base
+        if (parsed.done === true) {
+          finalResponse = parsed;
         }
       } catch (e) {
+        // Skip malformed lines
         continue;
       }
     }
     
-    // If we can't parse any line, return the raw response
-    const fallbackResponse = { content: responseText };
+    // If we have accumulated content, create a proper response
+    if (completeContent && finalResponse) {
+      // Create a response with the complete content
+      const reconstructedResponse = {
+        ...finalResponse,
+        message: finalResponse.message ? {
+          ...finalResponse.message,
+          content: completeContent
+        } : { content: completeContent }
+      };
+      
+      // Cache the result
+      this._cacheResult(cacheKey, reconstructedResponse);
+      return reconstructedResponse;
+    }
+    
+    // If we can't parse any line or no content, return empty response
+    const fallbackResponse = { content: '' };
     this._cacheResult(cacheKey, fallbackResponse);
     return fallbackResponse;
   }
