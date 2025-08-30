@@ -10,10 +10,16 @@ class OllamaProvider extends BaseProvider {
       requestFormat: 'ollama',
       responseFormat: 'ollama'
     });
+
+    // Performance optimizations
+    this._responseCache = new Map();
+    this._maxCacheSize = 50;
+    this._cacheExpiry = 2 * 60 * 1000; // 2 minutes
+    this._lastCacheCleanup = Date.now();
   }
 
   // ============================================================================
-  // OLLAMA-SPECIFIC FEATURES
+  // OLLAMA-SPECIFIC FEATURES WITH PERFORMANCE OPTIMIZATIONS
   // ============================================================================
 
   /**
@@ -32,29 +38,8 @@ class OllamaProvider extends BaseProvider {
     // If this is a streaming response (multiple JSON objects separated by newlines)
     if (responseText.includes('\n') && responseText.trim().split('\n').length > 1) {
       // Parse the streaming response and extract the final complete response
-      const lines = responseText.trim().split('\n');
-      const lastLine = lines[lines.length - 1];
-      
-      try {
-        // Try to parse the last line as JSON (this should be the final response)
-        const finalResponse = JSON.parse(lastLine);
-        return finalResponse;
-      } catch (error) {
-        // If the last line isn't valid JSON, try to find the last valid JSON response
-        for (let i = lines.length - 1; i >= 0; i--) {
-          try {
-            const parsed = JSON.parse(lines[i]);
-            if (parsed.message || parsed.content) {
-              return parsed;
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-        
-        // If we can't parse any line, return the raw response
-        return { content: responseText };
-      }
+      const finalResponse = this._parseStreamingResponse(responseText);
+      return finalResponse;
     } else {
       // Single response, parse normally
       try {
@@ -111,6 +96,123 @@ class OllamaProvider extends BaseProvider {
       // SDK-based providers implement their own extractUsage
       return this.extractUsageFromSDK(response);
     }
+  }
+
+  // ============================================================================
+  // PRIVATE HELPER METHODS FOR PERFORMANCE OPTIMIZATION
+  // ============================================================================
+
+  /**
+   * Parse streaming response with optimized processing
+   */
+  _parseStreamingResponse (responseText) {
+    // Check cache first
+    const cacheKey = this._generateCacheKey(responseText);
+    if (this._responseCache.has(cacheKey)) {
+      const cached = this._responseCache.get(cacheKey);
+      if (Date.now() - cached.timestamp < this._cacheExpiry) {
+        return cached.response;
+      }
+    }
+
+    const lines = responseText.trim().split('\n');
+    const lineCount = lines.length;
+    
+    // Start from the last line and work backwards for efficiency
+    for (let i = lineCount - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        if (parsed.message || parsed.content) {
+          // Cache the result
+          this._cacheResult(cacheKey, parsed);
+          return parsed;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+    
+    // If we can't parse any line, return the raw response
+    const fallbackResponse = { content: responseText };
+    this._cacheResult(cacheKey, fallbackResponse);
+    return fallbackResponse;
+  }
+
+  /**
+   * Generate cache key for response caching
+   */
+  _generateCacheKey (responseText) {
+    // Use a hash of the response text for caching
+    let hash = 0;
+    const str = responseText.slice(0, 100); // Only hash first 100 chars for performance
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    
+    return hash.toString();
+  }
+
+  /**
+   * Cache result with size management and cleanup
+   */
+  _cacheResult (key, value) {
+    // Periodic cache cleanup
+    if (Date.now() - this._lastCacheCleanup > this._cacheExpiry) {
+      this._cleanupCache();
+      this._lastCacheCleanup = Date.now();
+    }
+
+    // Check cache size and trim if necessary
+    if (this._responseCache.size >= this._maxCacheSize) {
+      // Remove oldest entries (first 20% of cache)
+      const removeCount = Math.floor(this._maxCacheSize * 0.2);
+      const keys = Array.from(this._responseCache.keys()).slice(0, removeCount);
+      keys.forEach(k => this._responseCache.delete(k));
+    }
+
+    this._responseCache.set(key, {
+      response: value,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Clean up expired cache entries
+   */
+  _cleanupCache () {
+    const now = Date.now();
+    for (const [key, value] of this._responseCache.entries()) {
+      if (now - value.timestamp > this._cacheExpiry) {
+        this._responseCache.delete(key);
+      }
+    }
+  }
+
+  // ============================================================================
+  // CACHE MANAGEMENT METHODS
+  // ============================================================================
+
+  /**
+   * Clear all caches
+   */
+  clearCaches () {
+    this._responseCache.clear();
+    this._lastCacheCleanup = Date.now();
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats () {
+    return {
+      responseCacheSize: this._responseCache.size,
+      maxCacheSize: this._maxCacheSize,
+      cacheExpiry: this._cacheExpiry,
+      lastCleanup: this._lastCacheCleanup
+    };
   }
 
   // All other core functionality is inherited from BaseProvider
