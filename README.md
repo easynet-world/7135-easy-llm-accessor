@@ -5,8 +5,6 @@
 
 # Easy LLM Client
 
-License: MIT Node.js Version
-
 ### **One Client → Multiple LLM Providers + Chat + Vision + Streaming**
 
 # 🚀 **Quick Start (30 seconds)** 
