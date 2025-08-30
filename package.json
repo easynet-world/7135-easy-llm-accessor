@@ -1,6 +1,6 @@
 {
   "name": "easy-llm-accessor",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A developer-friendly, configurable LLM client supporting multiple providers, chat, and vision",
   "main": "index.js",
   "scripts": {
