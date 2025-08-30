@@ -3,8 +3,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen.svg)](https://nodejs.org/)
 
-# Easy LLM Client
-
 ### **One Client → Multiple LLM Providers + Chat + Vision + Streaming**
 
 # 🚀 **Quick Start (30 seconds)** 
