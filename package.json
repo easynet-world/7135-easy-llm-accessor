@@ -26,6 +26,24 @@
   ],
   "author": "Your Name",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/easynet-world/7135-easy-llm-cli.git"
+  },
+  "homepage": "https://github.com/easynet-world/7135-easy-llm-cli#readme",
+  "bugs": {
+    "url": "https://github.com/easynet-world/7135-easy-llm-cli/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/easynet-world"
+  },
+  "maintainers": [
+    {
+      "name": "EasyNet World",
+      "email": "support@easynet.world"
+    }
+  ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.18.0",
     "axios": "^1.6.0",
