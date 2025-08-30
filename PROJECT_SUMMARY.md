@@ -55,7 +55,7 @@ __tests__/           # Comprehensive test suite
 
 ### **Basic Setup**
 ```javascript
-const LLMClient = require('easy-llm-cli');
+const LLMClient = require('easy-llm-accessor');
 
 // Initialize with default provider (OpenAI)
 const client = new LLMClient();

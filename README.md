@@ -14,7 +14,7 @@ License: MIT Node.js Version
 ## 1\. Install
 
 ```bash
-npm install easy-llm-cli
+npm install easy-llm-accessor
 ```
 
 ## 2\. Configure
@@ -30,7 +30,7 @@ OPENAI_MODEL=gpt-4
 ## 3\. Use
 
 ```javascript
-const LLMClient = require('easy-llm-cli');
+const LLMClient = require('easy-llm-accessor');
 const client = new LLMClient();
 
 // Chat
