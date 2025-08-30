@@ -41,6 +41,5 @@
       "release": "patch"
     }
   ],
-  "tagFormat": "v${version}",
-  "preset": "angular"
+  "tagFormat": "v${version}"
 }
