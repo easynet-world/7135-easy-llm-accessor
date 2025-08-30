@@ -13,14 +13,38 @@ npm install easy-llm-accessor
 
 ```javascript
 const LLMClient = require('easy-llm-accessor');
+
+// Initialize client
 const client = new LLMClient();
 
-// Chat with any provider
-const response = await client.ask('Hello!');
+// Basic chat
+const response = await client.ask('Hello! How are you?');
 console.log(response.content);
+
+// Chat with messages array
+const messages = [
+  { role: 'user', content: 'What is AI?' },
+  { role: 'assistant', content: 'AI is artificial intelligence...' },
+  { role: 'user', content: 'Can you explain more?' }
+];
+const chatResponse = await client.chat(messages);
+
+// Vision (OpenAI, Grok, Anthropic)
+const visionResponse = await client.see(
+  'What do you see in this image?',
+  'https://example.com/image.jpg'
+);
+
+// Streaming
+const stream = await client.streamChat('Tell me a story');
+for await (const chunk of stream) {
+  console.log(chunk.choices[0]?.delta?.content || '');
+}
 
 // Switch providers on the fly
 client.switchProvider('anthropic');
+client.switchProvider('groq');
+client.switchProvider('ollama');
 ```
 
 ## 🌟 Supported Providers
