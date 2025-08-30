@@ -1,5 +1,7 @@
 const OpenAI = require('openai');
 const BaseProvider = require('./base-provider');
+const CacheMixin = require('./mixins/cache-mixin');
+const MessageFormattingMixin = require('./mixins/message-formatting-mixin');
 
 class OpenAICompatibleProvider extends BaseProvider {
   constructor (config, providerName, defaultVisionModel = null) {
@@ -14,11 +16,38 @@ class OpenAICompatibleProvider extends BaseProvider {
       })
     });
 
-    // Performance optimizations
-    this._modelsCache = new Map();
-    this._visionSupportCache = new Map();
-    this._cacheExpiry = 5 * 60 * 1000; // 5 minutes
-    this._lastModelsFetch = 0;
+    // Initialize mixins
+    this._initializeMixins();
+  }
+
+  /**
+   * Initialize mixins with provider-specific configuration
+   */
+  _initializeMixins() {
+    // Initialize cache mixin for models and vision support caching
+    Object.assign(this, new CacheMixin({
+      defaultExpiry: 5 * 60 * 1000, // 5 minutes
+      defaultMaxSize: 100,
+      cleanupInterval: 2 * 60 * 1000 // 2 minutes
+    }));
+
+    // Initialize message formatting mixin
+    Object.assign(this, new MessageFormattingMixin({
+      maxMessageLength: 100000, // 100KB
+      maxMessages: 100,
+      supportedRoles: ['user', 'assistant', 'system']
+    }));
+
+    // Create caches
+    this.createCache('models', {
+      expiry: 5 * 60 * 1000,
+      maxSize: 100
+    });
+
+    this.createCache('visionSupport', {
+      expiry: 10 * 60 * 1000, // 10 minutes
+      maxSize: 100
+    });
   }
 
   // ============================================================================
@@ -48,12 +77,17 @@ class OpenAICompatibleProvider extends BaseProvider {
   async checkSDKAvailability () {
     try {
       // Use cached models if available and not expired
-      if (this._modelsCache.size > 0 && (Date.now() - this._lastModelsFetch) < this._cacheExpiry) {
+      if (this.hasCache('models', 'availability')) {
         return true;
       }
 
       const response = await this.client.models.list();
-      return response.data.length > 0;
+      const hasModels = response.data.length > 0;
+      
+      // Cache the result
+      this.setCache('models', 'availability', hasModels, { expiry: 5 * 60 * 1000 });
+      
+      return hasModels;
     } catch (error) {
       return false;
     }
@@ -62,8 +96,8 @@ class OpenAICompatibleProvider extends BaseProvider {
   async listSDKModels () {
     try {
       // Check cache first
-      if (this._modelsCache.size > 0 && (Date.now() - this._lastModelsFetch) < this._cacheExpiry) {
-        return Array.from(this._modelsCache.values());
+      if (this.hasCache('models', 'list')) {
+        return this.getCache('models', 'list');
       }
 
       const response = await this.client.models.list();
@@ -74,12 +108,8 @@ class OpenAICompatibleProvider extends BaseProvider {
         supports_vision: this.checkVisionSupport(model.id)
       }));
 
-      // Update cache
-      this._modelsCache.clear();
-      models.forEach(model => {
-        this._modelsCache.set(model.id, model);
-      });
-      this._lastModelsFetch = Date.now();
+      // Cache the result
+      this.setCache('models', 'list', models, { expiry: 5 * 60 * 1000 });
 
       return models;
     } catch (error) {
@@ -100,47 +130,34 @@ class OpenAICompatibleProvider extends BaseProvider {
     }
 
     // Check cache first
-    if (this._visionSupportCache.has(modelName)) {
-      return this._visionSupportCache.get(modelName);
+    if (this.hasCache('visionSupport', modelName)) {
+      return this.getCache('visionSupport', modelName);
     }
 
     const supportsVision = modelName.toLowerCase().includes('vision');
     
     // Cache the result
-    this._visionSupportCache.set(modelName, supportsVision);
+    this.setCache('visionSupport', modelName, supportsVision, { expiry: 10 * 60 * 1000 });
     
-    // Limit cache size
-    if (this._visionSupportCache.size > 100) {
-      const keys = Array.from(this._visionSupportCache.keys()).slice(0, 20);
-      keys.forEach(k => this._visionSupportCache.delete(k));
-    }
-
     return supportsVision;
   }
 
   // ============================================================================
-  // CACHE MANAGEMENT METHODS
+  // CACHE MANAGEMENT METHODS (Delegated to CacheMixin)
   // ============================================================================
 
   /**
    * Clear all caches
    */
   clearCaches () {
-    this._modelsCache.clear();
-    this._visionSupportCache.clear();
-    this._lastModelsFetch = 0;
+    this.clearAllCaches();
   }
 
   /**
    * Get cache statistics
    */
   getCacheStats () {
-    return {
-      modelsCacheSize: this._modelsCache.size,
-      visionSupportCacheSize: this._visionSupportCache.size,
-      lastModelsFetch: this._lastModelsFetch,
-      cacheAge: Date.now() - this._lastModelsFetch
-    };
+    return this.getAllCacheStats();
   }
 
   /**
