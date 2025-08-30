@@ -3,7 +3,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen.svg)](https://nodejs.org/)
 
-
 # Easy LLM Client
 
 License: MIT Node.js Version
@@ -60,16 +59,6 @@ const visionResponse = await client.see(
 * **📡 Streaming** - Real-time responses
 * **⚙️ Easy Config** - Simple `.env` setup
 * **🔧 Hot Switching** - Change providers seamlessly
-
-# 📁 **Architecture** 
-
-```
-BaseProvider (unified base class)
-    ↓
-AnthropicProvider / OpenAICompatibleProvider / OllamaProvider
-```
-
-**Provider Types**: `sdk` (OpenAI, Anthropic) and `http` (Ollama, custom)
 
 # 📝 **API Reference** 
 
