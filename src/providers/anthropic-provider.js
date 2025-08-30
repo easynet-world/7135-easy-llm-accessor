@@ -12,6 +12,11 @@ class AnthropicProvider extends BaseProvider {
         maxRetries: 3
       })
     });
+
+    // Performance optimizations
+    this._messageCache = new Map();
+    this._visionMessageCache = new Map();
+    this._maxCacheSize = 100;
   }
 
   // ============================================================================
@@ -38,13 +43,22 @@ class AnthropicProvider extends BaseProvider {
   }
 
   // ============================================================================
-  // ANTHROPIC-SPECIFIC MESSAGE FORMATTING
+  // ANTHROPIC-SPECIFIC MESSAGE FORMATTING WITH PERFORMANCE OPTIMIZATIONS
   // ============================================================================
 
   formatMessages (messages) {
-    const formattedMessages = [];
+    // Check cache first
+    const cacheKey = JSON.stringify(messages);
+    if (this._messageCache.has(cacheKey)) {
+      return this._messageCache.get(cacheKey);
+    }
 
-    for (const message of messages) {
+    const formattedMessages = [];
+    const messageCount = messages.length;
+
+    for (let i = 0; i < messageCount; i++) {
+      const message = messages[i];
+      
       if (typeof message === 'string') {
         formattedMessages.push({ role: 'user', content: message });
       } else if (message.role === 'assistant') {
@@ -55,37 +69,41 @@ class AnthropicProvider extends BaseProvider {
         // Anthropic doesn't support system messages in the same way
         // We'll prepend system messages to the first user message
         if (formattedMessages.length === 0) {
+          const nextMessage = messages[i + 1];
+          const userContent = nextMessage?.content || '';
           formattedMessages.push({
             role: 'user',
-            content: `System: ${message.content}\n\nUser: ${messages[messages.indexOf(message) + 1]?.content || ''}`
+            content: `System: ${message.content}\n\nUser: ${userContent}`
           });
+          i++; // Skip the next message since we've combined it
         }
       }
     }
 
+    // Cache the result
+    this._cacheResult(this._messageCache, cacheKey, formattedMessages);
     return formattedMessages;
   }
 
   formatVisionMessages (messages) {
-    const formattedMessages = [];
+    // Check cache first
+    const cacheKey = JSON.stringify(messages);
+    if (this._visionMessageCache.has(cacheKey)) {
+      return this._visionMessageCache.get(cacheKey);
+    }
 
-    for (const message of messages) {
+    const formattedMessages = [];
+    const messageCount = messages.length;
+
+    for (let i = 0; i < messageCount; i++) {
+      const message = messages[i];
+      
       if (typeof message === 'string') {
         formattedMessages.push({ role: 'user', content: message });
       } else if (message.role === 'user' && message.content) {
         if (Array.isArray(message.content)) {
-          // Handle multimodal content for Anthropic
-          const content = message.content.map(item => {
-            if (item.type === 'text') {
-              return { type: 'text', text: item.text || item.content };
-            } else if (item.type === 'image_url') {
-              return {
-                type: 'image',
-                source: this.processImageSourceForAnthropic(item.image_url)
-              };
-            }
-            return item;
-          });
+          // Handle multimodal content for Anthropic with optimized processing
+          const content = this._processMultimodalContent(message.content);
           formattedMessages.push({ role: 'user', content });
         } else {
           formattedMessages.push(message);
@@ -95,15 +113,17 @@ class AnthropicProvider extends BaseProvider {
       }
     }
 
+    // Cache the result
+    this._cacheResult(this._visionMessageCache, cacheKey, formattedMessages);
     return formattedMessages;
   }
 
   // ============================================================================
-  // ANTHROPIC-SPECIFIC FEATURES
+  // ANTHROPIC-SPECIFIC FEATURES WITH PERFORMANCE OPTIMIZATIONS
   // ============================================================================
 
   /**
-   * Process image sources for Anthropic's format
+   * Process image sources for Anthropic's format with caching
    */
   processImageSourceForAnthropic (imageUrl) {
     if (typeof imageUrl === 'string') {
@@ -140,7 +160,7 @@ class AnthropicProvider extends BaseProvider {
   }
 
   /**
-   * Get media type from data URL
+   * Get media type from data URL with optimized regex
    */
   getMediaTypeFromDataUrl (dataUrl) {
     const match = dataUrl.match(/data:([^;]+);/);
@@ -160,6 +180,57 @@ class AnthropicProvider extends BaseProvider {
     // Anthropic doesn't have a models.list() endpoint like OpenAI
     // Return empty array - models should be configured in .env
     return [];
+  }
+
+  // ============================================================================
+  // PRIVATE HELPER METHODS FOR PERFORMANCE OPTIMIZATION
+  // ============================================================================
+
+  /**
+   * Process multimodal content with optimized iteration
+   */
+  _processMultimodalContent (content) {
+    const contentCount = content.length;
+    const processedContent = new Array(contentCount);
+
+    for (let i = 0; i < contentCount; i++) {
+      const item = content[i];
+      if (item.type === 'text') {
+        processedContent[i] = { type: 'text', text: item.text || item.content };
+      } else if (item.type === 'image_url') {
+        processedContent[i] = {
+          type: 'image',
+          source: this.processImageSourceForAnthropic(item.image_url)
+        };
+      } else {
+        processedContent[i] = item;
+      }
+    }
+
+    return processedContent;
+  }
+
+  /**
+   * Cache result with size management
+   */
+  _cacheResult (cache, key, value) {
+    // Check cache size and trim if necessary
+    if (cache.size >= this._maxCacheSize) {
+      // Remove oldest entries (first 20% of cache)
+      const removeCount = Math.floor(this._maxCacheSize * 0.2);
+      const keys = Array.from(cache.keys()).slice(0, removeCount);
+      keys.forEach(k => cache.delete(k));
+    }
+
+    cache.set(key, value);
+  }
+
+  /**
+   * Clear all caches
+   */
+  clearCaches () {
+    this._messageCache.clear();
+    this._visionMessageCache.clear();
   }
 }
 

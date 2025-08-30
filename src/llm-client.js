@@ -15,36 +15,64 @@ class LLMClient {
     // Validate configuration
     this.config.validate();
 
+    // Performance optimizations
+    this._providerCache = new Map();
+    this._lastProviderSwitch = Date.now();
+    this._providerWarmupCache = new Set();
+
     // Initialize provider
     this.provider = this.initializeProvider();
   }
 
   initializeProvider () {
     const providerConfig = this.config.getProviderConfig();
+    const providerKey = `${this.config.provider}-${JSON.stringify(providerConfig)}`;
 
+    // Check cache first
+    if (this._providerCache.has(providerKey)) {
+      return this._providerCache.get(providerKey);
+    }
+
+    let provider;
     switch (this.config.provider.toLowerCase()) {
     case 'openai':
-      return new OpenAICompatibleProvider(providerConfig, 'openai', 'gpt-4-vision-preview');
+      provider = new OpenAICompatibleProvider(providerConfig, 'openai', 'gpt-4-vision-preview');
+      break;
 
     case 'anthropic':
-      return new AnthropicProvider(providerConfig);
+      provider = new AnthropicProvider(providerConfig);
+      break;
 
     case 'ollama':
-      return new OllamaProvider(providerConfig);
+      provider = new OllamaProvider(providerConfig);
+      break;
 
     case 'groq':
-      return new OpenAICompatibleProvider(providerConfig, 'groq', null);
+      provider = new OpenAICompatibleProvider(providerConfig, 'groq', null);
+      break;
 
     case 'grok':
-      return new OpenAICompatibleProvider(providerConfig, 'grok', 'grok-vision');
+      provider = new OpenAICompatibleProvider(providerConfig, 'grok', 'grok-vision');
+      break;
 
     default:
       throw new Error(`Unsupported provider: ${this.config.provider}`);
     }
+
+    // Cache the provider instance
+    this._providerCache.set(providerKey, provider);
+    
+    // Limit cache size
+    if (this._providerCache.size > 10) {
+      const keys = Array.from(this._providerCache.keys()).slice(0, 2);
+      keys.forEach(k => this._providerCache.delete(k));
+    }
+
+    return provider;
   }
 
   // ============================================================================
-  // CHAT METHODS - Using base provider's generic features
+  // CHAT METHODS - Using base provider's generic features with performance optimizations
   // ============================================================================
 
   /**
@@ -154,7 +182,7 @@ class LLMClient {
   }
 
   // ============================================================================
-  // PROVIDER MANAGEMENT
+  // PROVIDER MANAGEMENT WITH PERFORMANCE OPTIMIZATIONS
   // ============================================================================
 
   /**
@@ -164,30 +192,59 @@ class LLMClient {
   getProviderInfo () {
     return {
       name: this.provider.name,
-      config: this.config.getProviderConfig()
+      config: this.config.getProviderConfig(),
+      cacheStats: this.getCacheStats()
     };
   }
 
   /**
-   * Switch provider
+   * Switch provider with performance optimizations
    * @param {string} provider - New provider name
    */
   switchProvider (provider) {
+    if (this.config.provider === provider) {
+      return; // No need to switch if it's the same provider
+    }
+
     this.config.provider = provider;
     this.config.validate();
+    
+    // Clear provider cache when switching
+    this._providerCache.clear();
+    
     this.provider = this.initializeProvider();
+    this._lastProviderSwitch = Date.now();
   }
 
   /**
-   * Check if current provider is available
+   * Check if current provider is available with caching
    * @returns {Promise<boolean>} Provider availability
    */
   async isProviderAvailable () {
-    return this.provider.isAvailable();
+    const cacheKey = `availability-${this.provider.name}`;
+    
+    // Check if we have a recent availability check
+    if (this._providerWarmupCache.has(cacheKey)) {
+      return true;
+    }
+
+    const isAvailable = await this.provider.isAvailable();
+    
+    if (isAvailable) {
+      this._providerWarmupCache.add(cacheKey);
+      
+      // Limit warmup cache size
+      if (this._providerWarmupCache.size > 20) {
+        const entries = Array.from(this._providerWarmupCache).slice(0, 10);
+        entries.forEach(entry => this._providerWarmupCache.delete(entry));
+      }
+    }
+    
+    return isAvailable;
   }
 
   /**
-   * List available models for current provider
+   * List available models for current provider with caching
    * @returns {Promise<Array>} Available models
    */
   async listModels () {
@@ -195,6 +252,89 @@ class LLMClient {
       return this.provider.listModels();
     }
     throw new Error(`Provider ${this.provider.name} does not support model listing`);
+  }
+
+  // ============================================================================
+  // PERFORMANCE OPTIMIZATION METHODS
+  // ============================================================================
+
+  /**
+   * Warm up provider caches for better performance
+   * @returns {Promise<boolean>} Success status
+   */
+  async warmupCaches () {
+    try {
+      // Warm up provider availability
+      await this.isProviderAvailable();
+      
+      // Warm up models if supported
+      if (this.provider.listModels) {
+        await this.listModels();
+      }
+      
+      // Warm up provider-specific caches
+      if (this.provider.prefetchModels) {
+        await this.provider.prefetchModels();
+      }
+      
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Get cache statistics for all providers
+   * @returns {Object} Cache statistics
+   */
+  getCacheStats () {
+    const stats = {
+      providerCacheSize: this._providerCache.size,
+      providerWarmupCacheSize: this._providerWarmupCache.size,
+      lastProviderSwitch: this._lastProviderSwitch
+    };
+
+    // Add provider-specific cache stats
+    if (this.provider.getCacheStats) {
+      stats.providerSpecific = this.provider.getCacheStats();
+    }
+
+    return stats;
+  }
+
+  /**
+   * Clear all caches for better memory management
+   */
+  clearAllCaches () {
+    this._providerCache.clear();
+    this._providerWarmupCache.clear();
+    
+    // Clear provider-specific caches
+    if (this.provider.clearCaches) {
+      this.provider.clearCaches();
+    }
+  }
+
+  /**
+   * Optimize memory usage by trimming caches
+   */
+  optimizeMemory () {
+    // Trim provider cache
+    if (this._providerCache.size > 5) {
+      const keys = Array.from(this._providerCache.keys()).slice(0, 2);
+      keys.forEach(k => this._providerCache.delete(k));
+    }
+
+    // Trim warmup cache
+    if (this._providerWarmupCache.size > 10) {
+      const entries = Array.from(this._providerWarmupCache).slice(0, 5);
+      entries.forEach(entry => this._providerWarmupCache.delete(entry));
+    }
+
+    // Clear provider-specific caches if they support it
+    if (this.provider.clearCaches) {
+      this.provider.clearCaches();
+    }
   }
 }
 

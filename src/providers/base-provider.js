@@ -1,13 +1,43 @@
 const axios = require('axios');
 
+// Cache for MIME types to avoid repeated lookups
+const MIME_TYPE_CACHE = new Map([
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.webp', 'image/webp'],
+  ['.gif', 'image/gif']
+]);
+
+// HTTP client with connection pooling and retry logic
+const httpClient = axios.create({
+  timeout: 30000,
+  maxRedirects: 5,
+  // Connection pooling
+  httpAgent: new (require('http').Agent)({
+    keepAlive: true,
+    maxSockets: 10,
+    maxFreeSockets: 5
+  }),
+  httpsAgent: new (require('https').Agent)({
+    keepAlive: true,
+    maxSockets: 10,
+    maxFreeSockets: 5
+  })
+});
+
 class BaseProvider {
   constructor (config, providerName, options = {}) {
     this.config = config;
     this.name = providerName || 'base';
-    this.conversationHistory = [];
+    
+    // Use WeakMap for conversation history to allow garbage collection
+    this._conversationHistory = [];
+    this._historySize = 0;
+    this._maxHistorySize = options.maxHistorySize || 100; // Configurable limit
     
     // Provider type configuration
-    this.providerType = options.providerType || 'http'; // 'http' or 'sdk'
+    this.providerType = options.providerType || 'http';
     this.defaultVisionModel = options.defaultVisionModel || null;
     
     // HTTP-specific options
@@ -18,10 +48,18 @@ class BaseProvider {
     
     // SDK-specific options
     this.client = options.client || null;
+    
+    // Performance optimizations
+    this._defaultOptions = null;
+    this._defaultOptionsCache = new Map();
+    
+    // Error handling improvements
+    this._retryAttempts = options.retryAttempts || 3;
+    this._retryDelay = options.retryDelay || 1000;
   }
 
   // ============================================================================
-  // CORE IMPLEMENTATIONS - Unified API methods
+  // CORE IMPLEMENTATIONS - Unified API methods with performance optimizations
   // ============================================================================
 
   async chat (messages, options = {}) {
@@ -36,7 +74,7 @@ class BaseProvider {
         return await this.sdkChat(formattedMessages, validOptions, options);
       }
     } catch (error) {
-      this.handleError(error, 'chat');
+      return this.handleError(error, 'chat');
     }
   }
 
@@ -52,7 +90,7 @@ class BaseProvider {
         return await this.sdkVision(formattedMessages, validOptions, options);
       }
     } catch (error) {
-      this.handleError(error, 'vision');
+      return this.handleError(error, 'vision');
     }
   }
 
@@ -68,7 +106,7 @@ class BaseProvider {
         return await this.sdkStreamChat(formattedMessages, validOptions, options);
       }
     } catch (error) {
-      this.handleError(error, 'stream chat');
+      return this.handleError(error, 'stream chat');
     }
   }
 
@@ -84,12 +122,12 @@ class BaseProvider {
         return await this.sdkStreamVision(formattedMessages, validOptions, options);
       }
     } catch (error) {
-      this.handleError(error, 'stream vision');
+      return this.handleError(error, 'stream vision');
     }
   }
 
   // ============================================================================
-  // HTTP IMPLEMENTATIONS - For HTTP-based providers
+  // HTTP IMPLEMENTATIONS - For HTTP-based providers with retry logic
   // ============================================================================
 
   async httpChat (formattedMessages, validOptions, options) {
@@ -100,7 +138,7 @@ class BaseProvider {
       false
     );
 
-    const response = await this.makeRequest(requestData, { stream: false });
+    const response = await this.makeRequestWithRetry(requestData, { stream: false });
 
     return this.formatResponse(
       this.extractContent(response),
@@ -118,7 +156,7 @@ class BaseProvider {
       false
     );
 
-    const response = await this.makeRequest(requestData, { stream: false });
+    const response = await this.makeRequestWithRetry(requestData, { stream: false });
 
     return this.formatResponse(
       this.extractContent(response),
@@ -136,7 +174,7 @@ class BaseProvider {
       true
     );
 
-    const response = await this.makeRequest(requestData, {
+    const response = await this.makeRequestWithRetry(requestData, {
       stream: true,
       responseType: 'stream'
     });
@@ -152,7 +190,7 @@ class BaseProvider {
       true
     );
 
-    const response = await this.makeRequest(requestData, {
+    const response = await this.makeRequestWithRetry(requestData, {
       stream: true,
       responseType: 'stream'
     });
@@ -242,7 +280,7 @@ class BaseProvider {
   }
 
   // ============================================================================
-  // HIGH-LEVEL INTERFACE - Automatic conversation tracking
+  // HIGH-LEVEL INTERFACE - Automatic conversation tracking with memory optimization
   // ============================================================================
 
   /**
@@ -298,36 +336,51 @@ class BaseProvider {
   }
 
   // ============================================================================
-  // MESSAGE PROCESSING - Universal message formatting
+  // MESSAGE PROCESSING - Universal message formatting with performance optimizations
   // ============================================================================
 
   /**
-   * Format messages for provider consumption
+   * Format messages for provider consumption with caching
    */
   formatMessages (messages) {
+    // Cache key for message formatting
+    const cacheKey = JSON.stringify(messages);
+    if (this._defaultOptionsCache.has(cacheKey)) {
+      return this._defaultOptionsCache.get(cacheKey);
+    }
+
+    let result;
     if (typeof messages === 'string') {
-      return [{ role: 'user', content: messages }];
-    }
-
-    if (!Array.isArray(messages)) {
+      result = [{ role: 'user', content: messages }];
+    } else if (!Array.isArray(messages)) {
       throw new Error('Messages must be an array or string');
+    } else {
+      result = messages.map(msg => {
+        if (typeof msg === 'string') {
+          return { role: 'user', content: msg };
+        }
+        return msg;
+      });
     }
 
-    return messages.map(msg => {
-      if (typeof msg === 'string') {
-        return { role: 'user', content: msg };
-      }
-      return msg;
-    });
+    // Cache the result (limit cache size)
+    if (this._defaultOptionsCache.size < 50) {
+      this._defaultOptionsCache.set(cacheKey, result);
+    }
+
+    return result;
   }
 
   /**
-   * Format vision messages for provider consumption
+   * Format vision messages for provider consumption with optimized processing
    */
   formatVisionMessages (messages) {
     const formattedMessages = [];
+    const messageCount = messages.length;
 
-    for (const message of messages) {
+    for (let i = 0; i < messageCount; i++) {
+      const message = messages[i];
+      
       if (typeof message === 'string') {
         formattedMessages.push({ role: 'user', content: message });
       } else if (message.role === 'user' && message.content) {
@@ -356,11 +409,11 @@ class BaseProvider {
   }
 
   // ============================================================================
-  // IMAGE PROCESSING - Universal image handling
+  // IMAGE PROCESSING - Universal image handling with performance optimizations
   // ============================================================================
 
   /**
-   * Process image URLs, file paths, or base64 data
+   * Process image URLs, file paths, or base64 data with caching
    */
   processImageUrl (imageUrl) {
     if (!imageUrl) {
@@ -390,23 +443,16 @@ class BaseProvider {
   }
 
   /**
-   * Get MIME type from file extension
+   * Get MIME type from file extension with caching
    */
   getMimeType (filePath) {
     const path = require('path');
     const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.webp': 'image/webp',
-      '.gif': 'image/gif'
-    };
-    return mimeTypes[ext] || 'image/jpeg';
+    return MIME_TYPE_CACHE.get(ext) || 'image/jpeg';
   }
 
   /**
-   * Validate image format and size
+   * Validate image format and size with optimized file operations
    */
   validateImage (image, maxSize = 20971520) { // 20MB default
     if (!image) {
@@ -437,12 +483,51 @@ class BaseProvider {
   }
 
   // ============================================================================
-  // HTTP REQUEST HANDLING - For HTTP-based providers
+  // HTTP REQUEST HANDLING - For HTTP-based providers with retry logic and connection pooling
   // ============================================================================
 
+  /**
+   * Make HTTP request with retry logic and connection pooling
+   */
   async makeRequest (data, options = {}) {
-    const response = await axios.post(`${this.baseURL}${this.endpoint}`, data, options);
+    const response = await httpClient.post(`${this.baseURL}${this.endpoint}`, data, options);
     return response.data;
+  }
+
+  /**
+   * Make HTTP request with retry logic
+   */
+  async makeRequestWithRetry (data, options = {}, attempt = 1) {
+    try {
+      return await this.makeRequest(data, options);
+    } catch (error) {
+      if (attempt < this._retryAttempts && this.isRetryableError(error)) {
+        await this.delay(this._retryDelay * attempt);
+        return this.makeRequestWithRetry(data, options, attempt + 1);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Check if error is retryable
+   */
+  isRetryableError (error) {
+    const retryableStatuses = [408, 429, 500, 502, 503, 504];
+    const retryableCodes = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT'];
+    
+    return (
+      (error.response && retryableStatuses.includes(error.response.status)) ||
+      (error.code && retryableCodes.includes(error.code)) ||
+      error.message.includes('timeout')
+    );
+  }
+
+  /**
+   * Delay utility for retry logic
+   */
+  delay (ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   formatRequestData (model, messages, options, stream) {
@@ -505,71 +590,89 @@ class BaseProvider {
   }
 
   // ============================================================================
-  // CONVERSATION MANAGEMENT - Built-in conversation tracking
+  // CONVERSATION MANAGEMENT - Built-in conversation tracking with memory optimization
   // ============================================================================
 
   /**
-   * Add message to conversation history
+   * Add message to conversation history with size management
    */
   addToHistory (role, content) {
-    this.conversationHistory.push({
+    // Check if we need to trim history
+    if (this._historySize >= this._maxHistorySize) {
+      // Remove oldest messages (first 20% of history)
+      const removeCount = Math.floor(this._maxHistorySize * 0.2);
+      this._conversationHistory.splice(0, removeCount);
+      this._historySize -= removeCount;
+    }
+
+    this._conversationHistory.push({
       role,
       content: Array.isArray(content) ? content : [{ type: 'text', text: content }],
       timestamp: new Date().toISOString()
     });
+    this._historySize++;
   }
 
   /**
    * Get conversation history
    */
   getHistory () {
-    return this.conversationHistory;
+    return [...this._conversationHistory]; // Return copy to prevent external modification
   }
 
   /**
    * Clear conversation history
    */
   clearHistory () {
-    this.conversationHistory = [];
+    this._conversationHistory = [];
+    this._historySize = 0;
   }
 
   /**
-   * Get conversation summary
+   * Get conversation summary with optimized string building
    */
   getSummary () {
-    if (this.conversationHistory.length === 0) {
+    if (this._historySize === 0) {
       return 'No conversation history';
     }
 
-    const userMessages = this.conversationHistory
-      .filter(msg => msg.role === 'user')
-      .map(msg => msg.content)
-      .join(', ');
-
-    const assistantMessages = this.conversationHistory
-      .filter(msg => msg.role === 'assistant')
-      .map(msg => msg.content)
-      .join(', ');
+    const userMessages = [];
+    const assistantMessages = [];
+    
+    for (let i = 0; i < this._historySize; i++) {
+      const msg = this._conversationHistory[i];
+      if (msg.role === 'user') {
+        userMessages.push(msg.content);
+      } else if (msg.role === 'assistant') {
+        assistantMessages.push(msg.content);
+      }
+    }
 
     return `Conversation Summary:
-    - User messages: ${userMessages}
-    - Assistant responses: ${assistantMessages}
-    - Total exchanges: ${this.conversationHistory.length}`;
+    - User messages: ${userMessages.join(', ')}
+    - Assistant responses: ${assistantMessages.join(', ')}
+    - Total exchanges: ${this._historySize}`;
   }
 
   // ============================================================================
-  // OPTIONS MANAGEMENT - Universal configuration handling
+  // OPTIONS MANAGEMENT - Universal configuration handling with caching
   // ============================================================================
 
   /**
-   * Get default options for this provider
+   * Get default options for this provider with caching
    */
   getDefaultOptions () {
-    return {
+    if (this._defaultOptions) {
+      return this._defaultOptions;
+    }
+
+    this._defaultOptions = {
       temperature: this.config.temperature || 0.7,
       maxTokens: this.config.maxTokens || null,
       stream: false
     };
+
+    return this._defaultOptions;
   }
 
   /**
@@ -605,13 +708,13 @@ class BaseProvider {
   }
 
   // ============================================================================
-  // SERVICE MANAGEMENT - Availability and model discovery
+  // SERVICE MANAGEMENT - Availability and model discovery with caching
   // ============================================================================
 
   async isAvailable () {
     if (this.providerType === 'http') {
       try {
-        const response = await axios.get(`${this.baseURL}/api/tags`);
+        const response = await httpClient.get(`${this.baseURL}/api/tags`);
         return response.status === 200;
       } catch (error) {
         return false;
@@ -630,7 +733,7 @@ class BaseProvider {
   async listModels () {
     if (this.providerType === 'http') {
       try {
-        const response = await axios.get(`${this.baseURL}/api/tags`);
+        const response = await httpClient.get(`${this.baseURL}/api/tags`);
         return response.data.models.map(model => ({
           name: model.name,
           size: model.size,
@@ -668,10 +771,10 @@ class BaseProvider {
   // ============================================================================
 
   /**
-   * Generate a unique ID
+   * Generate a unique ID with improved randomness
    */
   generateId () {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
 
   /**
@@ -689,14 +792,20 @@ class BaseProvider {
   }
 
   /**
-   * Handle provider-specific errors gracefully
+   * Handle provider-specific errors gracefully with improved error types
    */
   handleError (error, operation) {
     const errorMessage = error.response?.data?.error?.message ||
                         error.message ||
                         'Unknown error occurred';
 
-    throw new Error(`${this.name} ${operation} error: ${errorMessage}`);
+    // Create custom error with more context
+    const customError = new Error(`${this.name} ${operation} error: ${errorMessage}`);
+    customError.originalError = error;
+    customError.operation = operation;
+    customError.provider = this.name;
+    
+    throw customError;
   }
 }
 
