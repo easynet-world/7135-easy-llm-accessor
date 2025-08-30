@@ -1,11 +1,8 @@
 # Easy LLM Client
 
-1.0.0 • Public • Published
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen.svg)](https://nodejs.org/)
 
-* Readme
-* Code
-* Dependencies
-* Dependents
 
 # Easy LLM Client
 
