@@ -12,6 +12,19 @@ class LLMClient {
       this.config.provider = options.provider;
     }
 
+    // Merge custom configuration options into the config
+    if (options.config) {
+      // Merge the custom config with the provider config
+      const providerConfig = this.config.getProviderConfig();
+      const mergedConfig = { ...providerConfig, ...options.config };
+      
+      // Update the config object with merged values
+      Object.assign(this.config, mergedConfig);
+      
+      // Also expose the merged config directly for easy access
+      this._mergedConfig = mergedConfig;
+    }
+
     // Validate configuration
     this.config.validate();
 
@@ -22,6 +35,46 @@ class LLMClient {
 
     // Initialize provider
     this.provider = this.initializeProvider();
+    
+    // Expose configuration properties directly for backward compatibility
+    this._exposeConfigProperties();
+  }
+
+  /**
+   * Expose configuration properties directly on the client instance
+   * for easy access like client.baseURL, client.model, etc.
+   */
+  _exposeConfigProperties() {
+    const providerConfig = this.config.getProviderConfig();
+    
+    // Expose common configuration properties
+    Object.defineProperties(this, {
+      baseURL: {
+        get: () => this._mergedConfig?.baseURL || providerConfig.baseURL,
+        enumerable: true,
+        configurable: true
+      },
+      model: {
+        get: () => this._mergedConfig?.model || providerConfig.model,
+        enumerable: true,
+        configurable: true
+      },
+      temperature: {
+        get: () => this._mergedConfig?.temperature || providerConfig.temperature,
+        enumerable: true,
+        configurable: true
+      },
+      maxTokens: {
+        get: () => this._mergedConfig?.maxTokens || providerConfig.maxTokens,
+        enumerable: true,
+        configurable: true
+      },
+      apiKey: {
+        get: () => this._mergedConfig?.apiKey || providerConfig.apiKey,
+        enumerable: true,
+        configurable: true
+      }
+    });
   }
 
   initializeProvider () {
@@ -167,6 +220,14 @@ class LLMClient {
   }
 
   /**
+   * Get conversation history array directly
+   * @returns {Array} Raw conversation history array
+   */
+  get _conversationHistory() {
+    return this.provider._conversationHistory || [];
+  }
+
+  /**
    * Clear conversation history
    */
   clearHistory () {
@@ -179,6 +240,66 @@ class LLMClient {
    */
   getSummary () {
     return this.provider.getSummary();
+  }
+
+  /**
+   * Get conversation history length
+   * @returns {number} Number of messages in conversation history
+   */
+  getHistoryLength() {
+    return this.provider._conversationHistory?.length || 0;
+  }
+
+  /**
+   * Get the last message from conversation history
+   * @returns {Object|null} Last message or null if no history
+   */
+  getLastMessage() {
+    const history = this.provider._conversationHistory;
+    return history && history.length > 0 ? history[history.length - 1] : null;
+  }
+
+  /**
+   * Get conversation history as a formatted string
+   * @returns {string} Formatted conversation history
+   */
+  getFormattedHistory() {
+    const history = this.provider._conversationHistory;
+    if (!history || history.length === 0) {
+      return 'No conversation history';
+    }
+
+    return history.map(msg => `${msg.role}: ${msg.content}`).join('\n');
+  }
+
+  /**
+   * Get conversation history length
+   * @returns {number} Number of messages in conversation history
+   */
+  getHistoryLength() {
+    return this.provider._conversationHistory?.length || 0;
+  }
+
+  /**
+   * Get the last message from conversation history
+   * @returns {Object|null} Last message or null if no history
+   */
+  getLastMessage() {
+    const history = this.provider._conversationHistory;
+    return history && history.length > 0 ? history[history.length - 1] : null;
+  }
+
+  /**
+   * Get conversation history as a formatted string
+   * @returns {string} Formatted conversation history
+   */
+  getFormattedHistory() {
+    const history = this.provider._conversationHistory;
+    if (!history || history.length === 0) {
+      return 'No conversation history';
+    }
+
+    return history.map(msg => `${msg.role}: ${msg.content}`).join('\n');
   }
 
   // ============================================================================
