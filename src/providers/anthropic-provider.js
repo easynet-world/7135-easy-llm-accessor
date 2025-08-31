@@ -1,8 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const BaseProvider = require('./base-provider');
 const CacheMixin = require('./mixins/cache-mixin');
-const ImageProcessingMixin = require('./mixins/image-processing-mixin');
-const MessageFormattingMixin = require('./mixins/message-formatting-mixin');
 
 class AnthropicProvider extends BaseProvider {
   constructor (config) {
@@ -16,32 +14,19 @@ class AnthropicProvider extends BaseProvider {
       })
     });
 
-    // Initialize mixins
-    this._initializeMixins();
+    // Initialize cache mixin after super() call
+    this._initializeCacheMixin();
   }
 
   /**
-   * Initialize mixins with provider-specific configuration
+   * Initialize cache mixin with provider-specific configuration
    */
-  _initializeMixins() {
+  _initializeCacheMixin() {
     // Initialize cache mixin for message caching
     Object.assign(this, new CacheMixin({
       defaultExpiry: 5 * 60 * 1000, // 5 minutes
       defaultMaxSize: 100,
       cleanupInterval: 2 * 60 * 1000 // 2 minutes
-    }));
-
-    // Initialize image processing mixin
-    Object.assign(this, new ImageProcessingMixin({
-      maxImageSize: 20971520, // 20MB
-      supportedFormats: ['jpg', 'jpeg', 'png', 'webp', 'gif']
-    }));
-
-    // Initialize message formatting mixin
-    Object.assign(this, new MessageFormattingMixin({
-      maxMessageLength: 100000, // 100KB
-      maxMessages: 100,
-      supportedRoles: ['user', 'assistant', 'system']
     }));
 
     // Create message caches
@@ -91,18 +76,6 @@ class AnthropicProvider extends BaseProvider {
   formatVisionMessages (messages) {
     // Use the message formatting mixin
     return this.formatVisionMessagesForAnthropic(messages);
-  }
-
-  // ============================================================================
-  // ANTHROPIC-SPECIFIC FEATURES WITH PERFORMANCE OPTIMIZATIONS
-  // ============================================================================
-
-  /**
-   * Process image sources for Anthropic's format with caching
-   */
-  processImageSourceForAnthropic (imageUrl) {
-    // Use the image processing mixin
-    return this.processImageForAnthropic(imageUrl);
   }
 
   // ============================================================================

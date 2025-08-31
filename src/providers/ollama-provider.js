@@ -12,14 +12,14 @@ class OllamaProvider extends BaseProvider {
       responseFormat: 'ollama'
     });
 
-    // Initialize mixins after super() call
-    this._initializeMixins();
+    // Initialize cache mixin after super() call
+    this._initializeCacheMixin();
   }
 
   /**
-   * Initialize mixins with provider-specific configuration
+   * Initialize cache mixin with provider-specific configuration
    */
-  _initializeMixins() {
+  _initializeCacheMixin() {
     // Initialize cache mixin for response caching
     const cacheMixin = new CacheMixin({
       defaultExpiry: 2 * 60 * 1000, // 2 minutes
@@ -27,15 +27,19 @@ class OllamaProvider extends BaseProvider {
       cleanupInterval: 2 * 60 * 1000 // 2 minutes
     });
 
-    // Copy all methods from the mixin
+    // Copy all methods from the cache mixin, but preserve existing methods
     Object.getOwnPropertyNames(Object.getPrototypeOf(cacheMixin)).forEach(key => {
-      if (key !== 'constructor') {
+      if (key !== 'constructor' && !this[key]) {
         this[key] = cacheMixin[key].bind(this);
       }
     });
 
-    // Copy instance properties
-    Object.assign(this, cacheMixin);
+    // Copy instance properties, but preserve existing ones
+    Object.keys(cacheMixin).forEach(key => {
+      if (!this[key]) {
+        this[key] = cacheMixin[key];
+      }
+    });
 
     // Create response cache
     this.createCache('responses', {
@@ -193,6 +197,141 @@ class OllamaProvider extends BaseProvider {
     } else {
       // SDK-based providers implement their own extractUsage
       return this.extractUsageFromSDK(response);
+    }
+  }
+
+  // ============================================================================
+  // HTTP IMPLEMENTATIONS - For HTTP-based providers with retry logic
+  // ============================================================================
+
+  async httpChat (formattedMessages, validOptions, options) {
+    const requestData = this.formatRequestData(
+      options.model || this.config.model,
+      formattedMessages,
+      validOptions,
+      false
+    );
+
+    const response = await this.makeRequestWithRetry(requestData, { stream: false });
+
+    return this.formatResponse(
+      this.extractContent(response),
+      response.model,
+      this.extractUsage(response),
+      'stop'
+    );
+  }
+
+  async httpVision (formattedMessages, validOptions, options) {
+    const requestData = this.formatRequestData(
+      options.model || this.defaultVisionModel || this.config.model,
+      formattedMessages,
+      validOptions,
+      false
+    );
+
+    const response = await this.makeRequestWithRetry(requestData, { stream: false });
+
+    return this.formatResponse(
+      this.extractContent(response),
+      response.model,
+      this.extractUsage(response),
+      'stop'
+    );
+  }
+
+  async httpStreamChat (formattedMessages, validOptions, options) {
+    const requestData = this.formatRequestData(
+      options.model || this.config.model,
+      formattedMessages,
+      validOptions,
+      true
+    );
+
+    const response = await this.makeRequestWithRetry(requestData, {
+      stream: true,
+      responseType: 'stream'
+    });
+
+    return response.data;
+  }
+
+  async httpStreamVision (formattedMessages, validOptions, options) {
+    const requestData = this.formatRequestData(
+      options.model || this.defaultVisionModel || this.config.model,
+      formattedMessages,
+      validOptions,
+      true
+    );
+
+    const response = await this.makeRequestWithRetry(requestData, {
+      stream: true,
+      responseType: 'stream'
+    });
+
+    return response.data;
+  }
+
+  // ============================================================================
+  // HTTP REQUEST HANDLING - For HTTP-based providers with retry logic and connection pooling
+  // ============================================================================
+
+  /**
+   * Make HTTP request with retry logic and connection pooling
+   */
+  async makeRequestWithRetry (data, options = {}, attempt = 1) {
+    try {
+      return await this.makeRequest(data, options);
+    } catch (error) {
+      if (attempt < this._retryAttempts && this.isRetryableError(error)) {
+        await this.delay(this._retryDelay * attempt);
+        return this.makeRequestWithRetry(data, options, attempt + 1);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Check if error is retryable
+   */
+  isRetryableError (error) {
+    const retryableStatuses = [408, 429, 500, 502, 503, 504];
+    const retryableCodes = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT'];
+    
+    return (
+      (error.response && retryableStatuses.includes(error.response.status)) ||
+      (error.code && retryableCodes.includes(error.code)) ||
+      error.message.includes('timeout')
+    );
+  }
+
+  /**
+   * Delay utility for retry logic
+   */
+  delay (ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  formatRequestData (model, messages, options, stream) {
+    if (this.requestFormat === 'ollama') {
+      return {
+        model,
+        messages,
+        options: {
+          temperature: options.temperature,
+          num_predict: options.maxTokens,
+          stream
+        }
+      };
+    } else {
+      // OpenAI-compatible format
+      return {
+        model,
+        messages,
+        temperature: options.temperature,
+        max_tokens: options.maxTokens,
+        stream
+      };
     }
   }
 
@@ -454,23 +593,7 @@ class OllamaProvider extends BaseProvider {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
-  // ============================================================================
-  // CACHE MANAGEMENT METHODS (Delegated to CacheMixin)
-  // ============================================================================
-
-  /**
-   * Clear all caches
-   */
-  clearCaches () {
-    this.clearAllCaches();
-  }
-
-  /**
-   * Get cache statistics
-   */
-  getCacheStats () {
-    return this.getAllCacheStats();
-  }
+  // All other core functionality is inherited from BaseProvider
 
   // All other core functionality is inherited from BaseProvider
 }
