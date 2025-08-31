@@ -466,11 +466,11 @@ describe('OllamaProvider', () => {
 
   describe('Cache Management', () => {
     test('should clear all caches', () => {
-      expect(() => provider.clearCaches()).not.toThrow();
+      expect(() => provider.clearAllCaches()).not.toThrow();
     });
 
     test('should get cache statistics', () => {
-      const stats = provider.getCacheStats();
+      const stats = provider.getAllCacheStats();
       expect(stats).toBeDefined();
     });
   });
