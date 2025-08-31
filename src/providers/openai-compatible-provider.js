@@ -74,11 +74,14 @@ class OpenAICompatibleProvider extends BaseProvider {
   // SDK-SPECIFIC OVERRIDES WITH PERFORMANCE OPTIMIZATIONS
   // ============================================================================
 
+  /**
+   * Override checkSDKAvailability to use OpenAI's models endpoint
+   */
   async checkSDKAvailability () {
     try {
       // Use cached models if available and not expired
       if (this.hasCache('models', 'availability')) {
-        return true;
+        return this.getCache('models', 'availability');
       }
 
       const response = await this.client.models.list();
@@ -93,6 +96,9 @@ class OpenAICompatibleProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Override listSDKModels to provide OpenAI-specific model information
+   */
   async listSDKModels () {
     try {
       // Check cache first
@@ -105,7 +111,9 @@ class OpenAICompatibleProvider extends BaseProvider {
         id: model.id,
         name: model.id,
         type: 'chat_completion',
-        supports_vision: this.checkVisionSupport(model.id)
+        supports_vision: this.checkVisionSupport(model.id),
+        created: model.created,
+        owned_by: model.owned_by
       }));
 
       // Cache the result
@@ -114,6 +122,45 @@ class OpenAICompatibleProvider extends BaseProvider {
       return models;
     } catch (error) {
       this.handleError(error, 'list models');
+      return [];
+    }
+  }
+
+  /**
+   * Override getModelInfo to provide OpenAI-specific model details
+   */
+  async getModelInfo(modelName = null) {
+    try {
+      const targetModel = modelName || this.config.model;
+      if (!targetModel) {
+        throw new Error('No model specified in configuration');
+      }
+
+      // Try to get detailed model info from OpenAI
+      try {
+        const response = await this.client.models.retrieve(targetModel);
+        return {
+          name: response.id,
+          context_length: response.context_length,
+          supports_vision: this.checkVisionSupport(response.id),
+          description: response.description || `${this.name} model: ${response.id}`,
+          provider: this.name,
+          created: response.created,
+          owned_by: response.owned_by,
+          permissions: response.permission
+        };
+      } catch (apiError) {
+        // Fall back to basic info if API call fails
+        return {
+          name: targetModel,
+          context_length: null,
+          supports_vision: this.checkVisionSupport(targetModel),
+          description: `${this.name} model: ${targetModel}`,
+          provider: this.name
+        };
+      }
+    } catch (error) {
+      throw new Error(`Failed to get model info: ${error.message}`);
     }
   }
 

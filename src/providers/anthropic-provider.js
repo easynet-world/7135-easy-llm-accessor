@@ -109,15 +109,109 @@ class AnthropicProvider extends BaseProvider {
   // SDK-SPECIFIC OVERRIDES
   // ============================================================================
 
+  /**
+   * Override checkSDKAvailability for Anthropic
+   * Anthropic doesn't have a models.list() endpoint, so we use a simple check
+   */
   async checkSDKAvailability () {
-    // Simple availability check for Anthropic
-    return true;
+    try {
+      // For Anthropic, we can check if the API key is valid by making a simple request
+      // or just return true since Anthropic doesn't have a models endpoint
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
+  /**
+   * Override listSDKModels for Anthropic
+   * Anthropic doesn't have a models.list() endpoint, so we return configured models
+   */
   async listSDKModels () {
     // Anthropic doesn't have a models.list() endpoint like OpenAI
-    // Return empty array - models should be configured in .env
-    return [];
+    // Return the models that are typically available with Anthropic
+    return [
+      {
+        id: 'claude-3-opus-20240229',
+        name: 'claude-3-opus-20240229',
+        type: 'chat_completion',
+        supports_vision: true,
+        description: 'Claude 3 Opus - Most capable model',
+        provider: this.name
+      },
+      {
+        id: 'claude-3-sonnet-20240229',
+        name: 'claude-3-sonnet-20240229',
+        type: 'chat_completion',
+        supports_vision: true,
+        description: 'Claude 3 Sonnet - Balanced capability and speed',
+        provider: this.name
+      },
+      {
+        id: 'claude-3-haiku-20240307',
+        name: 'claude-3-haiku-20240307',
+        type: 'chat_completion',
+        supports_vision: true,
+        description: 'Claude 3 Haiku - Fastest and most compact',
+        provider: this.name
+      }
+    ];
+  }
+
+  /**
+   * Override getModelInfo for Anthropic
+   * Provide Anthropic-specific model information
+   */
+  async getModelInfo(modelName = null) {
+    try {
+      const targetModel = modelName || this.config.model;
+      if (!targetModel) {
+        throw new Error('No model specified in configuration');
+      }
+
+      // Anthropic model information
+      const modelInfo = {
+        'claude-3-opus-20240229': {
+          name: 'claude-3-opus-20240229',
+          context_length: 200000,
+          supports_vision: true,
+          description: 'Claude 3 Opus - Most capable model for complex tasks',
+          provider: this.name,
+          family: 'claude-3',
+          capabilities: ['chat', 'vision', 'code', 'analysis']
+        },
+        'claude-3-sonnet-20240229': {
+          name: 'claude-3-sonnet-20240229',
+          context_length: 200000,
+          supports_vision: true,
+          description: 'Claude 3 Sonnet - Balanced capability and speed',
+          provider: this.name,
+          family: 'claude-3',
+          capabilities: ['chat', 'vision', 'code', 'analysis']
+        },
+        'claude-3-haiku-20240307': {
+          name: 'claude-3-haiku-20240307',
+          context_length: 200000,
+          supports_vision: true,
+          description: 'Claude 3 Haiku - Fastest and most compact model',
+          provider: this.name,
+          family: 'claude-3',
+          capabilities: ['chat', 'vision', 'code', 'analysis']
+        }
+      };
+
+      return modelInfo[targetModel] || {
+        name: targetModel,
+        context_length: 200000, // Default for Claude models
+        supports_vision: true,   // All Claude 3 models support vision
+        description: `Claude model: ${targetModel}`,
+        provider: this.name,
+        family: 'claude-3',
+        capabilities: ['chat', 'vision', 'code', 'analysis']
+      };
+    } catch (error) {
+      throw new Error(`Failed to get model info: ${error.message}`);
+    }
   }
 
   // ============================================================================
