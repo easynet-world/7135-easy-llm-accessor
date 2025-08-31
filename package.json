@@ -28,11 +28,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/easynet-world/7135-easy-llm-cli.git"
+    "url": "git+https://github.com/easynet-world/7135-easy-llm-accessor.git"
   },
-  "homepage": "https://github.com/easynet-world/7135-easy-llm-cli#readme",
+  "homepage": "https://github.com/easynet-world/7135-easy-llm-accessor#readme",
   "bugs": {
-    "url": "https://github.com/easynet-world/7135-easy-llm-cli/issues"
+    "url": "https://github.com/easynet-world/7135-easy-llm-accessor/issues"
   },
   "funding": {
     "type": "github",
