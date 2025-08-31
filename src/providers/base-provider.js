@@ -50,6 +50,23 @@ class BaseProvider {
     this._retryAttempts = options.retryAttempts || 3;
     this._retryDelay = options.retryDelay || 1000;
 
+    // Performance monitoring
+    this._performanceMetrics = {
+      requestCount: 0,
+      totalResponseTime: 0,
+      averageResponseTime: 0,
+      errorCount: 0,
+      lastRequestTime: null
+    };
+
+    // Health monitoring
+    this._healthStatus = {
+      lastCheck: null,
+      isHealthy: null,
+      consecutiveFailures: 0,
+      uptime: Date.now()
+    };
+
     // Mixins will be initialized by individual providers
   }
 
@@ -59,6 +76,489 @@ class BaseProvider {
   _initializeMixins() {
     // Mixins will be initialized by individual providers
     // This method can be overridden by subclasses
+  }
+
+  // ============================================================================
+  // GENERIC HEALTH MONITORING & AVAILABILITY
+  // ============================================================================
+
+  /**
+   * Check if provider is healthy and available
+   * @returns {Promise<boolean>} Health status
+   */
+  async isHealthy() {
+    try {
+      const startTime = Date.now();
+      
+      if (this.providerType === 'http') {
+        // For HTTP providers, use the provider's own implementation if available
+        if (this._checkHttpHealth) {
+          const isHealthy = await this._checkHttpHealth();
+          this._updateHealthStatus(isHealthy, Date.now() - startTime);
+          return isHealthy;
+        }
+        
+        // Fallback to generic HTTP health check
+        const response = await httpClient.get(`${this.baseURL}/api/tags`, {
+          timeout: 5000 // 5 second timeout for health check
+        });
+        const isHealthy = response.status === 200;
+        this._updateHealthStatus(isHealthy, Date.now() - startTime);
+        return isHealthy;
+      } else {
+        // SDK-based providers implement their own availability check
+        const isHealthy = await this.checkSDKAvailability();
+        this._updateHealthStatus(isHealthy, Date.now() - startTime);
+        return isHealthy;
+      }
+    } catch (error) {
+      this._updateHealthStatus(false, 0, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get detailed health status information
+   * @returns {Promise<Object>} Detailed health status
+   */
+  async getHealthStatus() {
+    try {
+      const startTime = Date.now();
+      
+      // Check basic availability
+      const isAvailable = await this.isHealthy();
+      
+      if (!isAvailable) {
+        return {
+          status: 'unhealthy',
+          available: false,
+          error: `${this.name} instance is not responding`,
+          consecutive_failures: this._healthStatus.consecutiveFailures,
+          uptime_ms: Date.now() - this._healthStatus.uptime,
+          last_check: this._healthStatus.lastCheck,
+          timestamp: new Date().toISOString()
+        };
+      }
+
+      // Get model count
+      const models = await this.listModels();
+      
+      // Calculate response time
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        status: 'healthy',
+        available: true,
+        models: models.length,
+        response_time_ms: responseTime,
+        base_url: this.baseURL,
+        consecutive_failures: this._healthStatus.consecutiveFailures,
+        uptime_ms: Date.now() - this._healthStatus.uptime,
+        last_check: this._healthStatus.lastCheck,
+        performance_metrics: this.getPerformanceMetrics(),
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        available: false,
+        error: error.message,
+        consecutive_failures: this._healthStatus.consecutiveFailures,
+        uptime_ms: Date.now() - this._healthStatus.uptime,
+        last_check: this._healthStatus.lastCheck,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Update health status internally
+   * @private
+   */
+  _updateHealthStatus(isHealthy, responseTime, error = null) {
+    this._healthStatus.lastCheck = new Date().toISOString();
+    
+    if (isHealthy) {
+      this._healthStatus.isHealthy = true;
+      this._healthStatus.consecutiveFailures = 0;
+    } else {
+      this._healthStatus.isHealthy = false;
+      this._healthStatus.consecutiveFailures++;
+    }
+
+    // Update performance metrics
+    this._updatePerformanceMetrics(responseTime, error);
+  }
+
+  // ============================================================================
+  // GENERIC MODEL MANAGEMENT
+  // ============================================================================
+
+  /**
+   * List all available models
+   * @returns {Promise<Array>} Array of model objects
+   */
+  async listModels() {
+    try {
+      if (this.providerType === 'http') {
+        // For HTTP providers, use the provider's own implementation if available
+        if (this._listHttpModels) {
+          return await this._listHttpModels();
+        }
+        
+        // Fallback to generic HTTP model listing
+        const response = await httpClient.get(`${this.baseURL}/api/tags`);
+        if (response.data && response.data.models) {
+          return response.data.models.map(model => ({
+            name: model.name,
+            size: this._formatBytes(model.size),
+            modified_at: model.modified_at,
+            digest: model.digest || null
+          }));
+        }
+        return [];
+      } else {
+        // SDK-based providers implement their own model listing
+        return await this.listSDKModels();
+      }
+    } catch (error) {
+      this.handleError(error, 'list models');
+      return [];
+    }
+  }
+
+  /**
+   * Switch to a different model
+   * @param {string} modelName - Name of the model to switch to
+   * @returns {Promise<boolean>} Success status
+   */
+  async switchModel(modelName) {
+    try {
+      // Update the current model in config
+      this.config.model = modelName;
+      
+      // Verify the model exists and is available
+      const models = await this.listModels();
+      const modelExists = models.some(model => model.name === modelName);
+      
+      if (!modelExists) {
+        throw new Error(`Model '${modelName}' not found. Available models: ${models.map(m => m.name).join(', ')}`);
+      }
+      
+      return true;
+    } catch (error) {
+      throw new Error(`Failed to switch model: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get information about the current model
+   * @returns {Promise<Object>} Model information
+   */
+  async getModelInfo(modelName = null) {
+    try {
+      const targetModel = modelName || this.config.model;
+      if (!targetModel) {
+        throw new Error('No model specified in configuration');
+      }
+
+      if (this.providerType === 'http') {
+        // For HTTP providers, use the provider's own implementation if available
+        if (this._getHttpModelInfo) {
+          return await this._getHttpModelInfo(targetModel);
+        }
+        
+        // Fallback to generic HTTP model info
+        try {
+          const response = await httpClient.post(`${this.baseURL}/api/show`, {
+            name: targetModel
+          });
+
+          if (response.data) {
+            return {
+              name: response.data.name,
+              size: this._formatBytes(response.data.size),
+              parameters: response.data.parameter_size || null,
+              quantization: response.data.quantization_level || null,
+              family: response.data.family || null,
+              modified_at: response.data.modified_at,
+              digest: response.data.digest || null
+            };
+          }
+        } catch (apiError) {
+          // Fall back to basic info if API call fails
+        }
+      }
+
+      // Return basic model info
+      return {
+        name: targetModel,
+        context_length: null,
+        supports_vision: this.supportsVision(),
+        description: `${this.name} model: ${targetModel}`,
+        provider: this.name
+      };
+    } catch (error) {
+      throw new Error(`Failed to get model info: ${error.message}`);
+    }
+  }
+
+  // ============================================================================
+  // GENERIC STREAMING SUPPORT
+  // ============================================================================
+
+  /**
+   * Create a generic streaming response handler
+   * @param {Object} response - Response object
+   * @param {Object} options - Streaming options
+   * @returns {EventEmitter} Stream emitter
+   */
+  _createGenericStream(response, options = {}) {
+    const { EventEmitter } = require('events');
+    const stream = new EventEmitter();
+    
+    let accumulatedContent = '';
+    let tokenCount = 0;
+    let isComplete = false;
+
+    const processChunk = (chunk) => {
+      try {
+        const lines = chunk.toString().split('\n');
+        
+        for (const line of lines) {
+          if (line.trim() && !isComplete) {
+            try {
+              const parsed = JSON.parse(line);
+              
+              // Handle different response formats
+              let content = '';
+              if (parsed.message?.content) {
+                content = parsed.message.content;
+              } else if (parsed.content) {
+                content = parsed.content;
+              } else if (parsed.response) {
+                content = parsed.response;
+              } else if (parsed.choices?.[0]?.delta?.content) {
+                content = parsed.choices[0].delta.content;
+              }
+              
+              if (content) {
+                accumulatedContent += content;
+                tokenCount++;
+                
+                // Emit chunk data
+                stream.emit('data', {
+                  content,
+                  model: parsed.model || this.config.model,
+                  done: false,
+                  token_count: tokenCount
+                });
+              }
+              
+              // Check for completion
+              if (parsed.done === true || parsed.choices?.[0]?.finish_reason) {
+                isComplete = true;
+                
+                // Emit final response
+                stream.emit('data', {
+                  content: '',
+                  model: parsed.model || this.config.model,
+                  done: true,
+                  final_content: accumulatedContent,
+                  total_tokens: tokenCount
+                });
+                
+                stream.emit('end', {
+                  content: accumulatedContent,
+                  model: parsed.model || this.config.model,
+                  usage: {
+                    input_tokens: options.messages?.length || 0,
+                    output_tokens: tokenCount
+                  }
+                });
+              }
+            } catch (e) {
+              // Skip malformed lines
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        stream.emit('error', error);
+      }
+    };
+
+    // Handle different response types
+    if (response.data && typeof response.data.on === 'function') {
+      // Stream response
+      response.data.on('data', processChunk);
+      response.data.on('error', (error) => stream.emit('error', error));
+      response.data.on('end', () => {
+        if (!isComplete) {
+          stream.emit('end', {
+            content: accumulatedContent,
+            model: this.config.model,
+            usage: {
+              input_tokens: options.messages?.length || 0,
+              output_tokens: tokenCount
+            }
+          });
+        }
+      });
+    } else if (response.data && typeof response.data === 'string') {
+      // String response (parse line by line)
+      const lines = response.data.split('\n');
+      lines.forEach(line => processChunk(Buffer.from(line + '\n')));
+    }
+
+    return stream;
+  }
+
+  // ============================================================================
+  // GENERIC PERFORMANCE MONITORING
+  // ============================================================================
+
+  /**
+   * Update performance metrics
+   * @private
+   */
+  _updatePerformanceMetrics(responseTime, error = null) {
+    this._performanceMetrics.requestCount++;
+    this._performanceMetrics.totalResponseTime += responseTime;
+    this._performanceMetrics.averageResponseTime = 
+      this._performanceMetrics.totalResponseTime / this._performanceMetrics.requestCount;
+    this._performanceMetrics.lastRequestTime = new Date().toISOString();
+    
+    if (error) {
+      this._performanceMetrics.errorCount++;
+    }
+  }
+
+  /**
+   * Get performance metrics
+   * @returns {Object} Performance metrics
+   */
+  getPerformanceMetrics() {
+    return {
+      ...this._performanceMetrics,
+      success_rate: this._performanceMetrics.requestCount > 0 
+        ? ((this._performanceMetrics.requestCount - this._performanceMetrics.errorCount) / this._performanceMetrics.requestCount * 100).toFixed(2) + '%'
+        : '0%'
+    };
+  }
+
+  /**
+   * Reset performance metrics
+   */
+  resetPerformanceMetrics() {
+    this._performanceMetrics = {
+      requestCount: 0,
+      totalResponseTime: 0,
+      averageResponseTime: 0,
+      errorCount: 0,
+      lastRequestTime: null
+    };
+  }
+
+  // ============================================================================
+  // GENERIC CONFIGURATION MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Get current configuration with provider-specific options
+   * @returns {Object} Current configuration
+   */
+  getCurrentConfig() {
+    const baseConfig = {
+      ...this.config,
+      provider: this.name,
+      providerType: this.providerType,
+      baseURL: this.baseURL,
+      endpoint: this.endpoint,
+      requestFormat: this.requestFormat,
+      responseFormat: this.responseFormat
+    };
+
+    // Add provider-specific options if available
+    if (this._extractProviderOptions) {
+      baseConfig.provider_options = this._extractProviderOptions(this.config);
+    }
+
+    return baseConfig;
+  }
+
+  /**
+   * Validate configuration
+   * @returns {Object} Validation result
+   */
+  validateConfiguration() {
+    const errors = [];
+    const warnings = [];
+
+    // Check required fields
+    if (!this.config) {
+      errors.push('Configuration object is required');
+    } else {
+      if (this.providerType === 'http' && !this.baseURL) {
+        errors.push('baseURL is required for HTTP providers');
+      }
+      
+      if (this.providerType === 'sdk' && !this.config.apiKey) {
+        warnings.push('apiKey is recommended for SDK providers');
+      }
+    }
+
+    // Check performance settings
+    if (this._retryAttempts < 1 || this._retryAttempts > 10) {
+      warnings.push('retryAttempts should be between 1 and 10');
+    }
+
+    if (this._retryDelay < 100 || this._retryDelay > 10000) {
+      warnings.push('retryDelay should be between 100ms and 10s');
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  }
+
+  // ============================================================================
+  // GENERIC UTILITY METHODS
+  // ============================================================================
+
+  /**
+   * Format bytes to human readable format
+   * @param {number} bytes - Number of bytes
+   * @returns {string} Formatted string
+   */
+  _formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  /**
+   * Generate cache key for response caching
+   * @param {string} text - Text to hash
+   * @returns {string} Cache key
+   */
+  _generateCacheKey(text) {
+    let hash = 0;
+    const str = text.slice(0, 100); // Only hash first 100 chars for performance
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    
+    return hash.toString();
   }
 
   // ============================================================================
@@ -235,7 +735,7 @@ class BaseProvider {
       this.extractContent(response),
       response.model,
       this.extractUsage(response),
-      this.extractFinishReason(response)
+      'stop'
     );
   }
 
@@ -766,40 +1266,9 @@ class BaseProvider {
     return true;
   }
 
-  async listModels () {
-    if (this.providerType === 'http') {
-      try {
-        const response = await httpClient.get(`${this.baseURL}/api/tags`);
-        return response.data.models.map(model => ({
-          name: model.name,
-          size: model.size,
-          modified_at: model.modified_at
-        }));
-      } catch (error) {
-        this.handleError(error, 'list models');
-      }
-    } else {
-      // SDK-based providers implement their own model listing
-      return this.listSDKModels();
-    }
-  }
-
   async listSDKModels () {
     // Default implementation - can be overridden by subclasses
     return [];
-  }
-
-  // ============================================================================
-  // MODEL INFORMATION - Dynamic model details
-  // ============================================================================
-
-  getModelInfo (modelName) {
-    return {
-      name: modelName,
-      context_length: null,
-      supports_vision: this.supportsVision(),
-      description: `${this.name} model`
-    };
   }
 
   // ============================================================================
