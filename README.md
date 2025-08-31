@@ -337,7 +337,7 @@ const client = new LLMClient({
 
 ## 🚀 Latest Update
 
-**Version 1.1.0** - Major Provider Refactoring & Enhanced README (100% Implementation)
+**Version 1.1.1** - Test Fixes & Cache Method Corrections (100% Implementation)
 
 - ✅ Health Monitoring & Availability
 - ✅ Model Switching & Management  
