@@ -45,7 +45,77 @@ class OllamaProvider extends BaseProvider {
   }
 
   // ============================================================================
-  // OLLAMA-SPECIFIC FEATURES WITH PERFORMANCE OPTIMIZATIONS
+  // PROVIDER-SPECIFIC IMPLEMENTATIONS FOR BASE PROVIDER
+  // ============================================================================
+
+  /**
+   * Provider-specific health check implementation
+   * @private
+   */
+  async _checkHttpHealth() {
+    try {
+      const response = await axios.get(`${this.baseURL}/api/tags`, {
+        timeout: 5000 // 5 second timeout for health check
+      });
+      return response.status === 200;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Provider-specific model listing implementation
+   * @private
+   */
+  async _listHttpModels() {
+    try {
+      const response = await axios.get(`${this.baseURL}/api/tags`);
+      
+      if (response.data && response.data.models) {
+        return response.data.models.map(model => ({
+          name: model.name,
+          size: this._formatBytes(model.size),
+          modified_at: model.modified_at,
+          digest: model.digest
+        }));
+      }
+      
+      return [];
+    } catch (error) {
+      throw new Error(`Failed to list models: ${error.message}`);
+    }
+  }
+
+  /**
+   * Provider-specific model info implementation
+   * @private
+   */
+  async _getHttpModelInfo(modelName) {
+    try {
+      const response = await axios.post(`${this.baseURL}/api/show`, {
+        name: modelName
+      });
+
+      if (response.data) {
+        return {
+          name: response.data.name,
+          size: this._formatBytes(response.data.size),
+          parameters: response.data.parameter_size,
+          quantization: response.data.quantization_level,
+          family: response.data.family,
+          modified_at: response.data.modified_at,
+          digest: response.data.digest
+        };
+      }
+
+      throw new Error('Failed to retrieve model information');
+    } catch (error) {
+      throw new Error(`Failed to get model info: ${error.message}`);
+    }
+  }
+
+  // ============================================================================
+  // OLLAMA-SPECIFIC FEATURES (Not available in base provider)
   // ============================================================================
 
   /**
@@ -124,6 +194,162 @@ class OllamaProvider extends BaseProvider {
       // SDK-based providers implement their own extractUsage
       return this.extractUsageFromSDK(response);
     }
+  }
+
+  // ============================================================================
+  // OLLAMA-SPECIFIC STREAMING IMPLEMENTATION
+  // ============================================================================
+
+  /**
+   * Stream chat responses in real-time (Ollama-specific implementation)
+   * @param {Array|string} messages - Messages to send
+   * @param {Object} options - Streaming options
+   * @returns {Promise<EventEmitter>} Stream emitter
+   */
+  async streamChat(messages, options = {}) {
+    const { EventEmitter } = require('events');
+    const stream = new EventEmitter();
+    
+    try {
+      const formattedMessages = this.formatMessages(messages);
+      const mergedOptions = this.mergeOptions(this.getDefaultOptions(), options);
+      const validOptions = this.validateOptions(mergedOptions);
+      
+      // Ensure streaming is enabled
+      validOptions.stream = true;
+      
+      // Prepare request data
+      const requestData = {
+        model: validOptions.model || this.config.model,
+        messages: formattedMessages,
+        stream: true,
+        ...this._extractOllamaOptions(validOptions)
+      };
+
+      // Make streaming request
+      const response = await axios.post(`${this.baseURL}${this.endpoint}`, requestData, {
+        ...options,
+        responseType: 'stream'
+      });
+
+      let accumulatedContent = '';
+      let tokenCount = 0;
+
+      response.data.on('data', (chunk) => {
+        const lines = chunk.toString().split('\n');
+        
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const parsed = JSON.parse(line);
+              
+              if (parsed.message?.content) {
+                const content = parsed.message.content;
+                accumulatedContent += content;
+                tokenCount++;
+                
+                // Emit chunk data
+                stream.emit('data', {
+                  content,
+                  model: parsed.model,
+                  done: false,
+                  token_count: tokenCount
+                });
+              }
+              
+              if (parsed.done === true) {
+                // Emit final response
+                stream.emit('data', {
+                  content: '',
+                  model: parsed.model,
+                  done: true,
+                  final_content: accumulatedContent,
+                  total_tokens: tokenCount
+                });
+                
+                stream.emit('end', {
+                  content: accumulatedContent,
+                  model: parsed.model,
+                  usage: {
+                    input_tokens: validOptions.messages?.length || 0,
+                    output_tokens: tokenCount
+                  }
+                });
+              }
+            } catch (e) {
+              // Skip malformed lines
+              continue;
+            }
+          }
+        }
+      });
+
+      response.data.on('error', (error) => {
+        stream.emit('error', error);
+      });
+
+      response.data.on('end', () => {
+        if (!stream.listenerCount('end')) {
+          // If no end event was emitted, emit it now
+          stream.emit('end', {
+            content: accumulatedContent,
+            model: requestData.model,
+            usage: {
+              input_tokens: validOptions.messages?.length || 0,
+              output_tokens: tokenCount
+            }
+          });
+        }
+      });
+
+    } catch (error) {
+      stream.emit('error', error);
+    }
+
+    return stream;
+  }
+
+  // ============================================================================
+  // OLLAMA-SPECIFIC ADVANCED CONFIGURATION OPTIONS
+  // ============================================================================
+
+  /**
+   * Extract Ollama-specific configuration options
+   * @param {Object} options - Options object
+   * @returns {Object} Ollama-specific options
+   */
+  _extractOllamaOptions(options) {
+    const ollamaOptions = {};
+    
+    // Standard options
+    if (options.temperature !== undefined) ollamaOptions.temperature = options.temperature;
+    if (options.maxTokens !== undefined) ollamaOptions.num_predict = options.maxTokens;
+    
+    // Ollama-specific options
+    if (options.topK !== undefined) ollamaOptions.top_k = options.topK;
+    if (options.topP !== undefined) ollamaOptions.top_p = options.topP;
+    if (options.repeatPenalty !== undefined) ollamaOptions.repeat_penalty = options.repeatPenalty;
+    if (options.seed !== undefined) ollamaOptions.seed = options.seed;
+    if (options.numCtx !== undefined) ollamaOptions.num_ctx = options.numCtx;
+    if (options.numGpu !== undefined) ollamaOptions.num_gpu = options.numGpu;
+    if (options.numThread !== undefined) ollamaOptions.num_thread = options.numThread;
+    if (options.repeatLastN !== undefined) ollamaOptions.repeat_last_n = options.repeatLastN;
+    if (options.tfsZ !== undefined) ollamaOptions.tfs_z = options.tfsZ;
+    if (options.typicalP !== undefined) ollamaOptions.typical_p = options.typicalP;
+    
+    return ollamaOptions;
+  }
+
+  /**
+   * Override getCurrentConfig to include Ollama-specific options
+   * @returns {Object} Current configuration with Ollama options
+   */
+  getCurrentConfig() {
+    const baseConfig = super.getCurrentConfig();
+    return {
+      ...baseConfig,
+      ollama_options: this._extractOllamaOptions(this.config)
+    };
   }
 
   // ============================================================================
@@ -211,6 +437,21 @@ class OllamaProvider extends BaseProvider {
     }
     
     return hash.toString();
+  }
+
+  /**
+   * Format bytes to human readable format
+   * @param {number} bytes - Number of bytes
+   * @returns {string} Formatted string
+   */
+  _formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
   // ============================================================================
