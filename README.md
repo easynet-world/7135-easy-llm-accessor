@@ -1,51 +1,18 @@
-# Easy LLM Client
+# Easy LLM Accessor
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
+A developer-friendly, configurable LLM client supporting multiple providers, chat, and vision capabilities.
 
-**One client for multiple LLM providers. Switch between OpenAI, Anthropic, Ollama, Groq, and Grok seamlessly.**
+## 🚀 Latest Update
 
-## 🚀 Quick Start
+**Version 1.0.16** - Complete Ollama Provider Features (100% Implementation)
 
-```bash
-npm install easy-llm-accessor
-```
+- ✅ Health Monitoring & Availability
+- ✅ Model Switching & Management  
+- ✅ Model Information Retrieval
+- ✅ Streaming Support
+- ✅ Advanced Configuration Options
 
-```javascript
-const LLMClient = require('easy-llm-accessor');
-
-// Initialize client
-const client = new LLMClient();
-
-// Basic chat
-const response = await client.ask('Hello! How are you?');
-console.log(response.content);
-
-// Chat with messages array
-const messages = [
-  { role: 'user', content: 'What is AI?' },
-  { role: 'assistant', content: 'AI is artificial intelligence...' },
-  { role: 'user', content: 'Can you explain more?' }
-];
-const chatResponse = await client.chat(messages);
-
-// Vision (OpenAI, Grok, Anthropic)
-const visionResponse = await client.see(
-  'What do you see in this image?',
-  'https://example.com/image.jpg'
-);
-
-// Streaming
-const stream = await client.streamChat('Tell me a story');
-for await (const chunk of stream) {
-  console.log(chunk.choices[0]?.delta?.content || '');
-}
-
-// Switch providers on the fly
-client.switchProvider('anthropic');
-client.switchProvider('groq');
-client.switchProvider('ollama');
-```
+## ✨ Features
 
 ## 🌟 Supported Providers
 
