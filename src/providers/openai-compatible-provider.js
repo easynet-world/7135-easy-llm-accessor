@@ -1,7 +1,6 @@
 const OpenAI = require('openai');
 const BaseProvider = require('./base-provider');
 const CacheMixin = require('./mixins/cache-mixin');
-const MessageFormattingMixin = require('./mixins/message-formatting-mixin');
 
 class OpenAICompatibleProvider extends BaseProvider {
   constructor (config, providerName, defaultVisionModel = null) {
@@ -16,26 +15,19 @@ class OpenAICompatibleProvider extends BaseProvider {
       })
     });
 
-    // Initialize mixins
-    this._initializeMixins();
+    // Initialize cache mixin after super() call
+    this._initializeCacheMixin();
   }
 
   /**
-   * Initialize mixins with provider-specific configuration
+   * Initialize cache mixin with provider-specific configuration
    */
-  _initializeMixins() {
+  _initializeCacheMixin() {
     // Initialize cache mixin for models and vision support caching
     Object.assign(this, new CacheMixin({
       defaultExpiry: 5 * 60 * 1000, // 5 minutes
       defaultMaxSize: 100,
       cleanupInterval: 2 * 60 * 1000 // 2 minutes
-    }));
-
-    // Initialize message formatting mixin
-    Object.assign(this, new MessageFormattingMixin({
-      maxMessageLength: 100000, // 100KB
-      maxMessages: 100,
-      supportedRoles: ['user', 'assistant', 'system']
     }));
 
     // Create caches
