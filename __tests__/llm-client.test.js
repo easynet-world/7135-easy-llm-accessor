@@ -188,4 +188,98 @@ describe('LLMClient', () => {
       expect(client.provider.sendVision).toHaveBeenCalled();
     });
   });
+
+  describe('Provider-specific methods', () => {
+    beforeEach(() => {
+      client = new LLMClient();
+    });
+
+    test('should check health status when provider supports it', async () => {
+      client.provider.isHealthy = jest.fn().mockResolvedValue(true);
+      
+      const isHealthy = await client.isHealthy();
+      
+      expect(isHealthy).toBe(true);
+      expect(client.provider.isHealthy).toHaveBeenCalled();
+    });
+
+    test('should throw error when provider does not support health monitoring', async () => {
+      delete client.provider.isHealthy;
+      
+      await expect(client.isHealthy()).rejects.toThrow('Provider openai does not support health monitoring');
+    });
+
+    test('should get detailed health status when provider supports it', async () => {
+      const mockHealthStatus = {
+        status: 'healthy',
+        available: true,
+        models: 5,
+        response_time_ms: 100
+      };
+      
+      client.provider.getHealthStatus = jest.fn().mockResolvedValue(mockHealthStatus);
+      
+      const healthStatus = await client.getHealthStatus();
+      
+      expect(healthStatus).toEqual(mockHealthStatus);
+      expect(client.provider.getHealthStatus).toHaveBeenCalled();
+    });
+
+    test('should throw error when provider does not support health status monitoring', async () => {
+      delete client.provider.getHealthStatus;
+      
+      await expect(client.getHealthStatus()).rejects.toThrow('Provider openai does not support health status monitoring');
+    });
+
+    test('should switch model when provider supports it', async () => {
+      client.provider.switchModel = jest.fn().mockResolvedValue(true);
+      
+      const result = await client.switchModel('new-model');
+      
+      expect(result).toBe(true);
+      expect(client.provider.switchModel).toHaveBeenCalledWith('new-model');
+    });
+
+    test('should throw error when provider does not support model switching', async () => {
+      delete client.provider.switchModel;
+      
+      await expect(client.switchModel('new-model')).rejects.toThrow('Provider openai does not support model switching');
+    });
+
+    test('should get model info when provider supports it', async () => {
+      const mockModelInfo = {
+        name: 'test-model',
+        size: '1.5 GB',
+        parameters: '7B'
+      };
+      
+      client.provider.getModelInfo = jest.fn().mockResolvedValue(mockModelInfo);
+      
+      const modelInfo = await client.getModelInfo();
+      
+      expect(modelInfo).toEqual(mockModelInfo);
+      expect(client.provider.getModelInfo).toHaveBeenCalledWith(null);
+    });
+
+    test('should get model info for specific model when provider supports it', async () => {
+      const mockModelInfo = {
+        name: 'specific-model',
+        size: '2.0 GB',
+        parameters: '13B'
+      };
+      
+      client.provider.getModelInfo = jest.fn().mockResolvedValue(mockModelInfo);
+      
+      const modelInfo = await client.getModelInfo('specific-model');
+      
+      expect(modelInfo).toEqual(mockModelInfo);
+      expect(client.provider.getModelInfo).toHaveBeenCalledWith('specific-model');
+    });
+
+    test('should throw error when provider does not support model information retrieval', async () => {
+      delete client.provider.getModelInfo;
+      
+      await expect(client.getModelInfo()).rejects.toThrow('Provider openai does not support model information retrieval');
+    });
+  });
 });

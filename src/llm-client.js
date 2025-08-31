@@ -375,6 +375,52 @@ class LLMClient {
     throw new Error(`Provider ${this.provider.name} does not support model listing`);
   }
 
+  /**
+   * Check if current provider is healthy and available
+   * @returns {Promise<boolean>} Health status
+   */
+  async isHealthy () {
+    if (this.provider.isHealthy) {
+      return this.provider.isHealthy();
+    }
+    throw new Error(`Provider ${this.provider.name} does not support health monitoring`);
+  }
+
+  /**
+   * Get detailed health status information for current provider
+   * @returns {Promise<Object>} Detailed health status
+   */
+  async getHealthStatus () {
+    if (this.provider.getHealthStatus) {
+      return this.provider.getHealthStatus();
+    }
+    throw new Error(`Provider ${this.provider.name} does not support health status monitoring`);
+  }
+
+  /**
+   * Switch to a different model for current provider
+   * @param {string} modelName - Name of the model to switch to
+   * @returns {Promise<boolean>} Success status
+   */
+  async switchModel (modelName) {
+    if (this.provider.switchModel) {
+      return this.provider.switchModel(modelName);
+    }
+    throw new Error(`Provider ${this.provider.name} does not support model switching`);
+  }
+
+  /**
+   * Get information about the current model for current provider
+   * @param {string} modelName - Optional model name, uses current if not specified
+   * @returns {Promise<Object>} Model information
+   */
+  async getModelInfo (modelName = null) {
+    if (this.provider.getModelInfo) {
+      return this.provider.getModelInfo(modelName);
+    }
+    throw new Error(`Provider ${this.provider.name} does not support model information retrieval`);
+  }
+
   // ============================================================================
   // PERFORMANCE OPTIMIZATION METHODS
   // ============================================================================
